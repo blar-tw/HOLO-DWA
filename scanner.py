@@ -71,7 +71,7 @@ class DroneLidarScanner(Node):
         valid_indices = np.where((ranges > msg.range_min) & (ranges < msg.range_max))[0]
         
         if len(valid_indices) == 0:
-            self.get_logger().info("👀 環顧四周：非常空曠，雷達範圍內無障礙物！")
+            self.get_logger().info("CLEARED")
             return
 
         # 1. 找出四周「最近」的障礙物

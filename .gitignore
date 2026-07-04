@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# colcon / ROS 2（以防有人在這個資料夾裡誤跑 colcon build）
+build/
+install/
+log/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# 一般 log 檔
+*.log
