@@ -1,0 +1,204 @@
+"""Holonomic Dynamic Window Approach, shared between the offline PyBullet
+prototype (dwa.py) and the live PX4/Gazebo node (scanner.py).
+
+No pybullet or rclpy dependency here so both callers can import it directly.
+The scoring/window logic mirrors dwa.py's dwa_control(); the only structural
+difference is that obstacles are given as a 2D point cloud (from LiDAR)
+instead of analytic Barrier shapes, and the whole velocity-space search is
+vectorized so it can run inside a 20 Hz control loop.
+"""
+import math
+import numpy as np
+
+
+class Config:
+    def __init__(self):
+        self.v_max = 10.0
+        self.vx_min = -10.0
+        self.vx_max = 10.0
+        self.vy_min = -10.0
+        self.vy_max = 10.0
+
+        self.a_max = 5.0
+        self.brake_a_max = 5.0
+
+        self.vx_resolution = 0.1
+        self.vy_resolution = 0.1
+        self.control_dt = 0.2
+        self.predict_time = 2.0
+        self.predict_dt = 0.1
+
+        self.heading_weight = 0.2
+        self.clearance_weight = 0.5
+        self.velocity_weight = 0.3
+
+        # Velocity reward mode (see discussion.md section 1):
+        #   "scalar"    reward raw |v|; keeps sliding along walls out of
+        #               local minima, but wanders diagonally while
+        #               accelerating in open space (box-window corners
+        #               have higher |v|).
+        #   "component" reward only the goal-directed velocity component;
+        #               flies straight in open space, but deadlocks in
+        #               front of walls (sideways escape scores zero).
+        #   "blend"     max(component, blend_alpha * scalar); component
+        #               drives in open space, the scaled scalar term keeps
+        #               a floor reward for any motion when blocked.
+        self.velocity_mode = "scalar"
+        self.blend_alpha = 0.5
+
+        self.robot_radius = 0.2
+        self.goal_threshold = 0.3
+
+
+def scan_to_world_points(ranges, angle_min, angle_increment, range_min, range_max,
+                          robot_x, robot_y, yaw, stride=1):
+    """Convert a body-frame 2D LiDAR scan into local/world-frame obstacle points.
+
+    angle 0 in the scan is straight ahead along the sensor's local +x axis;
+    `yaw` rotates that into the same frame as (robot_x, robot_y). `stride`
+    subsamples the rays to keep the point cloud small for the DWA search.
+    """
+    ranges = np.asarray(ranges, dtype=float)
+    idx = np.arange(0, len(ranges), stride)
+    r = ranges[idx]
+    angles = angle_min + idx * angle_increment
+
+    valid = np.isfinite(r) & (r > range_min) & (r < range_max)
+    if not np.any(valid):
+        return np.empty((0, 2))
+
+    r = r[valid]
+    a = angles[valid]
+
+    body_x = r * np.cos(a)
+    body_y = r * np.sin(a)
+
+    cos_yaw, sin_yaw = math.cos(yaw), math.sin(yaw)
+    world_x = robot_x + body_x * cos_yaw - body_y * sin_yaw
+    world_y = robot_y + body_x * sin_yaw + body_y * cos_yaw
+
+    return np.stack([world_x, world_y], axis=1)
+
+
+def dwa_control(state, goal_xy, obstacle_points, config, return_debug=False):
+    """Vectorized holonomic DWA search over the (vx, vy) dynamic window.
+
+    state: dict with "x", "y", "vx", "vy" in a common local frame.
+    goal_xy: (x, y) target in the same frame.
+    obstacle_points: (K, 2) array in the same frame, or shape (0, 2) if
+        nothing was seen.
+
+    Returns (vx, vy, ok). ok is False when no admissible velocity survives
+    (every sampled velocity would enter an obstacle or exceed the safe
+    braking speed) — the caller should hold / brake in that case.
+
+    If return_debug is True, returns (vx, vy, ok, debug) instead, where debug
+    is the chosen trajectory's score breakdown (raw 0..1 sub-scores and their
+    weighted contributions) or None when ok is False. Debug is for
+    logging/inspection only and does not affect the search.
+    """
+    x0, y0 = state["x"], state["y"]
+    vx_curr, vy_curr = state["vx"], state["vy"]
+    goal_x, goal_y = goal_xy
+
+    vx_min_d = max(config.vx_min, vx_curr - config.a_max * config.control_dt)
+    vx_max_d = min(config.vx_max, vx_curr + config.a_max * config.control_dt)
+    vy_min_d = max(config.vy_min, vy_curr - config.a_max * config.control_dt)
+    vy_max_d = min(config.vy_max, vy_curr + config.a_max * config.control_dt)
+
+    vx_range = np.arange(vx_min_d, vx_max_d + config.vx_resolution, config.vx_resolution)
+    vy_range = np.arange(vy_min_d, vy_max_d + config.vy_resolution, config.vy_resolution)
+    VX, VY = np.meshgrid(vx_range, vy_range, indexing="ij")
+    VX = VX.ravel()
+    VY = VY.ravel()
+
+    speed = np.hypot(VX, VY)
+    feasible = (speed > 1e-6) & (speed <= config.v_max)
+
+    steps = np.arange(config.predict_dt, config.predict_time + 1e-9, config.predict_dt)
+    traj_x = x0 + VX[:, None] * steps[None, :]
+    traj_y = y0 + VY[:, None] * steps[None, :]
+
+    if obstacle_points.shape[0] > 0:
+        ox = obstacle_points[:, 0]
+        oy = obstacle_points[:, 1]
+        dx = traj_x[:, :, None] - ox[None, None, :]
+        dy = traj_y[:, :, None] - oy[None, None, :]
+        dist_to_nearest = np.sqrt(dx * dx + dy * dy).min(axis=2)
+        traj_clearance = dist_to_nearest.min(axis=1)
+    else:
+        traj_clearance = np.full(VX.shape, np.inf)
+
+    safe_dist = traj_clearance - config.robot_radius
+    feasible &= safe_dist > 0
+
+    safe_speed = np.sqrt(2.0 * np.clip(safe_dist, 0.0, None) * config.brake_a_max)
+    feasible &= speed <= safe_speed
+
+    min_goal_dist = np.hypot(goal_x - traj_x, goal_y - traj_y).min(axis=1)
+    goal_reached = min_goal_dist < config.goal_threshold
+
+    goal_dx, goal_dy = goal_x - x0, goal_y - y0
+    start_dist = math.hypot(goal_dx, goal_dy)
+    scalar_speed = np.clip(speed, 0.0, config.v_max)
+    # Guard the division for the cosine below; sub-1e-6-speed candidates are
+    # already marked infeasible above, so their heading value is irrelevant.
+    speed_denom = np.where(speed > 1e-6, speed, 1.0)
+    if start_dist > 1e-6:
+        ux, uy = goal_dx / start_dist, goal_dy / start_dist
+        # Goal-directed speed component, used by "component"/"blend" velocity modes.
+        component_speed = np.clip(VX * ux + VY * uy, 0.0, config.v_max)
+        # Heading score = cosine of the angle between the velocity vector and the
+        # direction to the goal, in [-1, 1] (+1 = straight at goal, -1 = directly
+        # away). Distance-INDEPENDENT: this replaces the old progress-ratio term
+        # (start_dist - final_dist)/start_dist, which shrank to ~0 far from the
+        # goal and let the drone run away at max speed in open space with almost
+        # no restoring pull. See discussion.md section 3.
+        heading_score = (VX * ux + VY * uy) / speed_denom
+    else:
+        component_speed = np.zeros_like(scalar_speed)
+        heading_score = np.zeros_like(scalar_speed)
+
+    clearance_score = np.clip(safe_dist, 0.0, 1.0)
+    # Tradeoffs of each mode are documented on Config.velocity_mode and in
+    # discussion.md section 1.
+    if config.velocity_mode == "scalar":
+        reward_speed = scalar_speed
+    elif config.velocity_mode == "component":
+        reward_speed = component_speed
+    elif config.velocity_mode == "blend":
+        reward_speed = np.maximum(component_speed, config.blend_alpha * scalar_speed)
+    else:
+        raise ValueError(f"Unknown velocity_mode: {config.velocity_mode!r}")
+    velocity_score = reward_speed / config.v_max
+
+    score = (
+        config.heading_weight * heading_score
+        + config.clearance_weight * clearance_score
+        + config.velocity_weight * velocity_score
+    )
+    score = np.where(goal_reached, 10000.0 + speed, score)
+    score = np.where(feasible, score, -np.inf)
+
+    if not np.any(feasible):
+        if return_debug:
+            return 0.0, 0.0, False, None
+        return 0.0, 0.0, False
+
+    best = np.argmax(score)
+    if return_debug:
+        debug = {
+            # Raw sub-scores of the chosen trajectory. heading is in [-1, 1]
+            # (cosine to goal); clearance and velocity are in [0, 1].
+            "heading_score": float(heading_score[best]),
+            "clearance_score": float(clearance_score[best]),
+            "velocity_score": float(velocity_score[best]),
+            # Weighted contributions actually summed into the total score
+            "heading_term": float(config.heading_weight * heading_score[best]),
+            "clearance_term": float(config.clearance_weight * clearance_score[best]),
+            "velocity_term": float(config.velocity_weight * velocity_score[best]),
+            "total": float(score[best]),
+            "safe_dist": float(safe_dist[best]),
+        }
+        return float(VX[best]), float(VY[best]), True, debug
+    return float(VX[best]), float(VY[best]), True

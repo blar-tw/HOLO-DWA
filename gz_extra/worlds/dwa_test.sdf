@@ -146,21 +146,45 @@
       </spot>
     </light>
 
+    <!-- ===================== 目標點標記 ===================== -->
+    <!-- 對應 scanner.py 的預設 goal_x/goal_y 參數 (Gazebo world 座標)，x/y=(12,0)。 -->
+    <!-- 放在地面 (扁平綠色標記板)，而不是飛行高度 2m：GPU 2D LiDAR 對 visual 幾何打射線， -->
+    <!-- 若標記在 2m 掃描平面上會被當成障礙物擋在目標前 (見先前模擬)。貼地後雷達掃不到。 -->
+    <!-- 只有 <visual>、沒有 <collision>，無人機在 2m 高飛越，不會互動。 -->
+
+    <model name='goal_marker'>
+      <static>true</static>
+      <pose>12 0 0.025 0 0 0</pose>
+      <link name='link'>
+        <visual name='visual'>
+          <geometry>
+            <box><size>0.8 0.8 0.05</size></box>
+          </geometry>
+          <material>
+            <ambient>0 1 0 1</ambient>
+            <diffuse>0 1 0 1</diffuse>
+            <emissive>0 0.5 0 1</emissive>
+          </material>
+        </visual>
+      </link>
+    </model>
+
     <!-- ===================== 障礙物：牆 ===================== -->
-    <!-- 一道帶缺口的牆，擋在無人機正前方 x=5，y 方向留一個 y=1.5~3 的缺口當作通道 -->
+    <!-- 一道帶缺口的牆，擋在無人機正前方 x=5。缺口 y=0.75~3.75（寬 3m，中心 y=2.25）。 -->
+    <!-- 缺口暫時加寬（原設計 1.5m）以先驗證 end-to-end 能到終點，見 discussion.md 第 3 節。 -->
 
     <model name='wall_left'>
       <static>true</static>
-      <pose>5 -2.25 0.5 0 0 0</pose>
+      <pose>5 -1.25 2.5 0 0 0</pose>
       <link name='link'>
         <collision name='collision'>
           <geometry>
-            <box><size>0.2 4.5 5</size></box>
+            <box><size>0.2 4 5</size></box>
           </geometry>
         </collision>
         <visual name='visual'>
           <geometry>
-            <box><size>0.2 4.5 5</size></box>
+            <box><size>0.2 4 5</size></box>
           </geometry>
           <material>
             <ambient>0.6 0.6 0.6 1</ambient>
@@ -172,16 +196,16 @@
 
     <model name='wall_right'>
       <static>true</static>
-      <pose>5 2.25 0.5 0 0 0</pose>
+      <pose>5 5.75 2.5 0 0 0</pose>
       <link name='link'>
         <collision name='collision'>
           <geometry>
-            <box><size>0.2 4.5 5</size></box>
+            <box><size>0.2 4 5</size></box>
           </geometry>
         </collision>
         <visual name='visual'>
           <geometry>
-            <box><size>0.2 4.5 5</size></box>
+            <box><size>0.2 4 5</size></box>
           </geometry>
           <material>
             <ambient>0.6 0.6 0.6 1</ambient>
@@ -196,16 +220,16 @@
 
     <model name='cylinder_1'>
       <static>true</static>
-      <pose>8 1 0.5 0 0 0</pose>
+      <pose>8 1 2.5 0 0 0</pose>
       <link name='link'>
         <collision name='collision'>
           <geometry>
-            <cylinder><radius>0.3</radius><length>1</length></cylinder>
+            <cylinder><radius>0.3</radius><length>5</length></cylinder>
           </geometry>
         </collision>
         <visual name='visual'>
           <geometry>
-            <cylinder><radius>0.3</radius><length>1</length></cylinder>
+            <cylinder><radius>0.3</radius><length>5</length></cylinder>
           </geometry>
           <material>
             <ambient>0.8 0.2 0.2 1</ambient>
@@ -217,16 +241,16 @@
 
     <model name='cylinder_2'>
       <static>true</static>
-      <pose>8 -1.2 0.5 0 0 0</pose>
+      <pose>8 -1.2 2.5 0 0 0</pose>
       <link name='link'>
         <collision name='collision'>
           <geometry>
-            <cylinder><radius>0.3</radius><length>1</length></cylinder>
+            <cylinder><radius>0.3</radius><length>5</length></cylinder>
           </geometry>
         </collision>
         <visual name='visual'>
           <geometry>
-            <cylinder><radius>0.3</radius><length>1</length></cylinder>
+            <cylinder><radius>0.3</radius><length>5</length></cylinder>
           </geometry>
           <material>
             <ambient>0.8 0.2 0.2 1</ambient>

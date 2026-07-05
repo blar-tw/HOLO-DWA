@@ -16,3 +16,6 @@ log/
 
 # 一般 log 檔
 *.log
+
+# Simulation run outputs
+.simrun/

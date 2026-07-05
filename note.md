@@ -47,27 +47,24 @@ gz service -s /world/dwa_test/create \
   --timeout 1000 \
   --req 'sdf: "<sdf version=\"1.9\"><model name=\"runtime_cyl\"><static>true</static><pose>6 0 0.5 0 0 0</pose><link name=\"link\"><collision name=\"c\"><geometry><cylinder><radius>0.3</radius><length>1</length></cylinder></geometry></collision><visual name=\"v\"><geometry><cylinder><radius>0.3</radius><length>1</length></cylinder></geometry></visual></link></model></sdf>"'
 
-
-# terminal1:
-cd ~/PX4-Autopilot
-make px4_sitl gz_x500_lidar_2d 
+# terminal 1 — PX4 SITL + Gazebo(帶障礙物的 dwa_test world)
 cd ~/PX4-Autopilot
 PX4_GZ_WORLD=dwa_test make px4_sitl gz_x500_lidar_2d
 
-# terminal2:
+# terminal 2 — XRCE-DDS Agent
 MicroXRCEAgent udp4 -p 8888
-# terminal3:
+
+# terminal 3 — LiDAR bridge(world 是 dwa_test,跟你選取的筆記一樣)
 source /opt/ros/humble/setup.bash
 ros2 run ros_gz_bridge parameter_bridge \
   /world/dwa_test/model/x500_lidar_2d_0/link/link/sensor/lidar_2d_v2/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan \
   --ros-args \
   -r /world/dwa_test/model/x500_lidar_2d_0/link/link/sensor/lidar_2d_v2/scan:=/lidar
 
-# terminal4:
-cd ~/ws
+# terminal 4 — DWA 導航節點(goal 預設 12,0,可用參數改)
 source /opt/ros/humble/setup.bash
 source ~/ws/install/setup.bash
-python3 ~/ws/src/HOLO-DWA/scanner.py
+python3 ~/ws/src/HOLO-DWA/scanner.py --ros-args -p goal_x:=12.0 -p goal_y:=0.0
 
 
 # refresh sdf

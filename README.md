@@ -8,9 +8,9 @@
 
 - ✅ PX4 offboard 控制骨架：arm → takeoff → hover
 - ✅ 2D LiDAR 讀取（`/lidar` → `LaserScan`），可算出最近障礙物距離與正前方距離
-- ⬜ DWA 速度規劃尚未接上 `scanner.py`，目前只有 hover + 障礙物回報，還不會自動避障
+- ✅ DWA 速度規劃已接上 `scanner.py`（`dwa_core.py`），取代原本的 hover-only 邏輯，起飛到高度後會自動朝目標點導航並用 LiDAR 點雲避障
 
-換句話說：整合骨架（PX4 ↔ ROS2 ↔ Gazebo LiDAR）已經打通，DWA 演算法本身還沒接進這個迴圈。這是下一步要做的事。
+`dwa_core.py` 是從 `dwa.py`（PyBullet 離線原型）抽出來、去掉 pybullet 依賴的共用演算法：一樣的 holonomic DWA 速度視窗搜尋與評分邏輯，差別只在障礙物來源改成 LiDAR 掃描轉出來的 2D 點雲，並整個向量化以應付 20Hz 控制迴圈。`dwa.py` 本身維持不動，繼續當作可視化/離線測試用的原型。
 
 ## 架構 / 資料流
 
@@ -32,11 +32,20 @@ sensor_msgs/msg/LaserScan  (ROS 2 topic: /lidar)
         ▼
 scanner.py (DroneLidarScanner node)
         │
-        ▼
-lidar_callback() → 最近障礙物 / 正前方距離
+        ├─ lidar_callback() → 儲存最新掃描 + 最近障礙物/正前方距離回報
+        ├─ odom_callback()  → 目前位置 / 速度 / yaw
         │
         ▼
-（下一步）DWA 速度規劃 → TrajectorySetpoint → PX4 offboard
+run_dwa_navigation() → dwa_core.dwa_control() → (vx, vy)
+        │
+        ▼
+publish_velocity_setpoint() → TrajectorySetpoint (x/y 速度控制、z 位置控制) → PX4 offboard
+```
+
+導航目標點透過 ROS 2 參數 `goal_x` / `goal_y` 設定（預設 `12.0, 0.0`）。**座標是 Gazebo world 座標**（跟 `dwa_test.sdf` 裡障礙物的座標同一個 frame），程式內部會轉成 PX4 NED（北=gz_y、東=gz_x）；無人機起飛時就會轉向目標、飛行途中機頭也會持續朝著目標。例如：
+
+```bash
+python3 ~/ws/src/HOLO-DWA/scanner.py --ros-args -p goal_x:=12.0 -p goal_y:=0.0
 ```
 
 無人機模型：`x500_lidar_2d`（PX4-Autopilot 內建），LiDAR sensor 用自訂的 `lidar_2d_v2`（常駐開啟，不需額外觸發）。
@@ -60,8 +69,13 @@ cd ~/ws/src/HOLO-DWA
 
 **Bridge 建立成功、topic 存在，但完全收不到訊息（包括 `/clock`）**：這是 ROS 2 Humble 預設的 `ros-humble-ros-gz-bridge`（對應 Gazebo Fortress）跟 PX4 在 Ubuntu 22.04 上實際裝的 Gazebo Harmonic 版本不相容造成的，topic 看起來有連上但訊息解碼失敗、靜默掉包。正確做法是改裝 `ros-humble-ros-gzharmonic`。完整除錯過程與根因分析見 [bug.md](bug.md)。
 
+## 演算法討論
+
+DWA 目前遇到的演算法層級問題（速度獎勵的分量/純量取捨、門口困境）與候選解法整理在 [discussion.md](discussion.md)。
+
 ## Roadmap
 
-- [ ] 把 DWA 速度規劃接進 `scanner.py`，取代目前的 hover-only 邏輯
-- [ ] 把改良版 DWA 演算法（holonomic 相關改動）整理進 repo 並補上說明
+- [x] 把 DWA 速度規劃接進 `scanner.py`，取代目前的 hover-only 邏輯
+- [x] 把改良版 DWA 演算法（holonomic 相關改動）整理進 repo 並補上說明（見 `dwa_core.py`）
 - [ ] 補齊 `package.xml` / launch file，讓整個流程可以用 `ros2 launch` 一次帶起來，取代 tmux script
+- [ ] 實機/實測驗證：LiDAR 安裝偏移量（目前假設 LiDAR 與機身原點重合）、goal 座標與 Gazebo world 座標的對應關係
