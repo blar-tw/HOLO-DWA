@@ -125,7 +125,7 @@ progress = (start_dist − final_dist) / start_dist
 heading_score = (vx·ux + vy·uy) / |v|          # ux,uy 是指向目標的單位向量
 ```
 
-範圍固定 [−1, 1](+1 正對目標、−1 背對),**不管目標多遠,朝目標 vs 背對的分差永遠是滿的 ±weight**。相對舊的 progress 比值(遠處歸零),這直接補回了遠距離的導向力,且「背對目標」變成明確的負分,主動抑制暴走。改動只在 `dwa_core.py` 的 heading 那一項,clearance / velocity / 動態視窗都沒動。
+範圍固定 [−1, 1] (+1 正對目標、−1 背對),**不管目標多遠,朝目標 vs 背對的分差永遠是滿的 ±weight**。相對舊的 progress 比值(遠處歸零),這直接補回了遠距離的導向力,且「背對目標」變成明確的負分,主動抑制暴走。改動只在 `dwa_core.py` 的 heading 那一項,clearance / velocity / 動態視窗都沒動。
 
 ### 驗證(離線,尚未接 Gazebo 重跑)
 

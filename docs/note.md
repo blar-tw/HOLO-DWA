@@ -71,3 +71,25 @@ python3 ~/ws/src/HOLO-DWA/scanner.py --ros-args -p goal_x:=12.0 -p goal_y:=0.0
 cd ~/ws/src/HOLO-DWA
 ./gz_extra/install.sh ~/PX4-Autopilot
 
+
+# ============================================================
+# 一鍵啟動：~/ws/run.sh
+# ============================================================
+# 開一個 4-pane tmux(session: holo-dwa),自動依序帶起
+# PX4 SITL+Gazebo / XRCE-DDS Agent / LiDAR bridge / scanner.py
+# bridge 跟 scanner 會先 sleep 等 gz 起來,不用手動搶時序。
+
+cd ~/ws
+./run.sh              # 預設 goal (12.0, 0.0)
+./run.sh 8.0 -3.0     # 自訂 goal_x goal_y
+./run.sh kill         # 關掉整個 session
+
+# tmux: 離開畫面(sim 繼續跑) Ctrl-b d;重新接回 tmux attach -t holo-dwa
+
+# 常用環境變數覆寫:
+#   PX4_DIR       PX4-Autopilot 路徑  (預設 ~/PX4-Autopilot)
+#   PX4_GZ_WORLD  world             (預設 dwa_test,bridge topic 會跟著換)
+#   ROS_SETUP     ROS 2 setup       (預設 /opt/ros/humble/setup.bash)
+
+# 前置需求:已 colcon build(要有 ~/ws/install/setup.bash)、裝好 tmux。
+

@@ -129,7 +129,7 @@ echo 'source ~/ws/install/setup.bash' >> ~/.bashrc
 
 `PX4-Autopilot` 的 `Tools/simulation/gz` 是一個獨立 submodule（指向 [`PX4/PX4-gazebo-models`](https://github.com/PX4/PX4-gazebo-models)），`v1.14.4` 這個 tag 當時 pin 住的 submodule commit **還沒有** `x500_lidar_2d` 跟 `lidar_2d_v2` 這兩個 model，需要的 airframe 設定檔（`4013_gz_x500_lidar_2d`）也還沒進到 ROMFS。如果跳過這步，`make px4_sitl gz_x500_lidar_2d` 會直接失敗（`ninja: error: unknown target 'gz_x500_lidar_2d'`）。
 
-這幾個檔案已經整理進本 repo 的 [`gz_extra/`](gz_extra/)（從 `PX4-gazebo-models` 和 `PX4-Autopilot` 上游最新 `main` branch 複製，SDF/mesh 本身跟 PX4 韌體版本無關，可以安全套用到 `v1.14.4`）。跑一次 setup script 把它們複製進 PX4-Autopilot（可重複執行，不會重複加同一行）：
+這幾個檔案已經整理進本 repo 的 [`gz_extra/`](../gz_extra/)（從 `PX4-gazebo-models` 和 `PX4-Autopilot` 上游最新 `main` branch 複製，SDF/mesh 本身跟 PX4 韌體版本無關，可以安全套用到 `v1.14.4`）。跑一次 setup script 把它們複製進 PX4-Autopilot（可重複執行，不會重複加同一行）：
 
 ```bash
 cd ~/ws/src/HOLO-DWA

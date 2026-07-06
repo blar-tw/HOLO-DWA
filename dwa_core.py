@@ -32,7 +32,7 @@ class Config:
         self.clearance_weight = 0.5
         self.velocity_weight = 0.3
 
-        # Velocity reward mode (see discussion.md section 1):
+        # Velocity reward mode (see docs/discussion.md section 1):
         #   "scalar"    reward raw |v|; keeps sliding along walls out of
         #               local minima, but wanders diagonally while
         #               accelerating in open space (box-window corners
@@ -153,7 +153,7 @@ def dwa_control(state, goal_xy, obstacle_points, config, return_debug=False):
         # away). Distance-INDEPENDENT: this replaces the old progress-ratio term
         # (start_dist - final_dist)/start_dist, which shrank to ~0 far from the
         # goal and let the drone run away at max speed in open space with almost
-        # no restoring pull. See discussion.md section 3.
+        # no restoring pull. See docs/discussion.md section 3.
         heading_score = (VX * ux + VY * uy) / speed_denom
     else:
         component_speed = np.zeros_like(scalar_speed)
@@ -161,7 +161,7 @@ def dwa_control(state, goal_xy, obstacle_points, config, return_debug=False):
 
     clearance_score = np.clip(safe_dist, 0.0, 1.0)
     # Tradeoffs of each mode are documented on Config.velocity_mode and in
-    # discussion.md section 1.
+    # docs/discussion.md section 1.
     if config.velocity_mode == "scalar":
         reward_speed = scalar_speed
     elif config.velocity_mode == "component":
