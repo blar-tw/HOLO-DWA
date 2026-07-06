@@ -21,7 +21,7 @@
 #   SESSION       tmux session name             (default: holo-dwa)
 
 set -euo pipefail
-
+tmux set-option -g mouse on
 # --- resolve paths ----------------------------------------------------------
 # WS_DIR is the colcon workspace root (holds install/, src/), independent of
 # where this script lives. Override with WS_DIR=... if your workspace moves.
