@@ -1,0 +1,9 @@
+# Lab run outputs - keep the folder, ignore the data.
+logs/*.csv
+logs/*.jsonl
+# reset bookkeeping written by run_lab.sh
+logs/.scan_pane
+logs/.restart_scanner.sh
+!logs/.gitkeep
+__pycache__/
+*.pyc

@@ -46,6 +46,14 @@ class Config:
         self.velocity_mode = "scalar"
         self.blend_alpha = 0.5
 
+        # clearance_score saturates at this many meters of safe_dist (margin
+        # beyond robot_radius). Lower = "safe enough is enough": trajectories
+        # keeping >= this margin all score 1.0, and the 0..norm band gets a
+        # steeper gradient, so the term concentrates on truly close passes
+        # instead of rewarding loitering far from any obstacle (doorway
+        # problem, docs/discussion.md section 2).
+        self.clearance_norm = 1.0
+
         self.robot_radius = 0.2
         self.goal_threshold = 0.3
 
@@ -159,7 +167,7 @@ def dwa_control(state, goal_xy, obstacle_points, config, return_debug=False):
         component_speed = np.zeros_like(scalar_speed)
         heading_score = np.zeros_like(scalar_speed)
 
-    clearance_score = np.clip(safe_dist, 0.0, 1.0)
+    clearance_score = np.clip(safe_dist / config.clearance_norm, 0.0, 1.0)
     # Tradeoffs of each mode are documented on Config.velocity_mode and in
     # docs/discussion.md section 1.
     if config.velocity_mode == "scalar":

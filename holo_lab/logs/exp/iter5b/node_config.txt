@@ -1,0 +1,18 @@
+        self.dwa_config = dwa_core.Config()
+        self.dwa_config.v_max = 1.5
+        self.dwa_config.vx_min = -1.5
+        self.dwa_config.vx_max = 1.5
+        self.dwa_config.vy_min = -1.5
+        self.dwa_config.vy_max = 1.5
+        self.dwa_config.a_max = 1.0
+        self.dwa_config.brake_a_max = 1.0
+        self.dwa_config.vx_resolution = 0.1
+        self.dwa_config.vy_resolution = 0.1
+        self.dwa_config.control_dt = 0.2
+        self.dwa_config.predict_time = 3.0
+        self.dwa_config.predict_dt = 0.2
+        # Planner keep-out must be >= the 0.3 m collision proxy, otherwise the
+        # planner is allowed to fly through what the lab records as a hit
+        # (x500 body is ~0.25 m anyway; 0.2 was optimistic).
+        self.dwa_config.robot_radius = 0.30
+        self.dwa_config.goal_threshold = 0.5
