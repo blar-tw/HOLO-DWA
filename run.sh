@@ -38,10 +38,39 @@ SESSION="${SESSION:-holo-dwa}"
 # The namespace tracks the world name, so it must match PX4_GZ_WORLD.
 LIDAR_TOPIC="/world/${PX4_GZ_WORLD}/model/x500_lidar_2d_0/link/link/sensor/lidar_2d_v2/scan"
 
+# --- process cleanup --------------------------------------------------------
+# tmux only owns the pane shells. A PX4+gz run leaves a DETACHED gz server
+# behind and the XRCE agent binds udp:8888 - both survive 'kill-session' and
+# then block the next PX4 launch. Reap them by pattern with the given signal.
+kill_sim_procs() {
+  local sig="${1:-TERM}"
+  pkill -"${sig}" -f 'gz sim'           2>/dev/null || true
+  pkill -"${sig}" -x  px4               2>/dev/null || true
+  pkill -"${sig}" -f 'MicroXRCEAgent'   2>/dev/null || true
+  pkill -"${sig}" -f 'parameter_bridge' 2>/dev/null || true
+  pkill -"${sig}" -f 'scanner\.py'      2>/dev/null || true
+  pkill -"${sig}" -f 'make px4_sitl'    2>/dev/null || true
+}
+
+# Patterns used to detect survivors (excludes this script via [p]x4 trick).
+SIM_PATTERN='gz sim|MicroXRCEAgent|[p]x4|parameter_bridge|scanner\.py'
+
+cleanup_sim() {
+  kill_sim_procs TERM
+  # gz server is stubborn; wait up to ~4s for a graceful exit, then force-kill.
+  for _ in $(seq 1 8); do
+    pgrep -f "${SIM_PATTERN}" >/dev/null 2>&1 || break
+    sleep 0.5
+  done
+  kill_sim_procs KILL
+}
+
 # --- teardown shortcut ------------------------------------------------------
 if [[ "${1:-}" == "kill" || "${1:-}" == "stop" ]]; then
   tmux kill-session -t "${SESSION}" 2>/dev/null && echo "Killed tmux session '${SESSION}'." \
     || echo "No tmux session '${SESSION}' running."
+  cleanup_sim
+  echo "Cleaned up sim processes (gz / px4 / agent / bridge / scanner)."
   exit 0
 fi
 
@@ -60,6 +89,13 @@ command -v tmux >/dev/null 2>&1 || fail "tmux not found (sudo apt install tmux).
 
 if tmux has-session -t "${SESSION}" 2>/dev/null; then
   fail "tmux session '${SESSION}' already running. Attach with 'tmux attach -t ${SESSION}' or './run.sh kill' first."
+fi
+
+# Reap leftovers from a previous run before launching. A detached gz server or
+# a still-bound agent port would otherwise stop PX4 from starting.
+if pgrep -f "${SIM_PATTERN}" >/dev/null 2>&1; then
+  echo "Found leftover sim processes from a previous run - cleaning up first..."
+  cleanup_sim
 fi
 
 # Source line reused by every ROS pane.
