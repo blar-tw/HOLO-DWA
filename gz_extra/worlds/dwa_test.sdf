@@ -146,12 +146,25 @@
       </spot>
     </light>
 
-    <!-- ===================== 目標點標記 ===================== -->
-    <!-- 對應 scanner.py 的預設 goal_x/goal_y 參數 (Gazebo world 座標)，x/y=(12,0)。 -->
-    <!-- 放在地面 (扁平綠色標記板)，而不是飛行高度 2m：GPU 2D LiDAR 對 visual 幾何打射線， -->
-    <!-- 若標記在 2m 掃描平面上會被當成障礙物擋在目標前 (見先前模擬)。貼地後雷達掃不到。 -->
-    <!-- 只有 <visual>、沒有 <collision>，無人機在 2m 高飛越，不會互動。 -->
+    <!-- ==================================================================
+         Arena layout (x forward, y left, drone starts near origin at 0,0).
 
+           x=-3 back wall / start area
+           x=3  obstacle 1: wall with a 1.5m gap at y=0
+           x=6  obstacle 2: three staggered cylinders (slalom)
+           x=9  obstacle 3: two box pillars with a 2m gap at y=0
+           x=12 goal (12, 0)
+           x=16 front wall
+           y in [-9, 9], enclosed left/right by boundary walls.
+
+         The whole arena is enclosed by a boundary wall. The drone passes the
+         three obstacle types in sequence before reaching the goal.
+         ================================================================== -->
+
+    <!-- ===================== Goal marker ===================== -->
+    <!-- Matches scanner.py default goal_x/goal_y = (12, 0) in Gazebo world coords. -->
+    <!-- Flat ground marker (visual only, no collision): a 2m LiDAR plane must not -->
+    <!-- treat it as an obstacle, and the drone flies over it at 2m without contact. -->
     <model name='goal_marker'>
       <static>true</static>
       <pose>12 0 0.025 0 0 0</pose>
@@ -169,23 +182,90 @@
       </link>
     </model>
 
-    <!-- ===================== 障礙物：牆 ===================== -->
-    <!-- 一道帶缺口的牆，擋在無人機正前方 x=5。缺口 y=0.75~3.75（寬 3m，中心 y=2.25）。 -->
-    <!-- 缺口暫時加寬（原設計 1.5m）以先驗證 end-to-end 能到終點，見 discussion.md 第 3 節。 -->
+    <!-- ===================== Boundary wall ===================== -->
+    <!-- Encloses the arena: x in [-4, 16], y in [-9, 9]. Height 6m so the 2m -->
+    <!-- LiDAR plane sees it. Thickness 0.2m. -->
 
-    <model name='wall_left'>
+    <model name='boundary_back'>
       <static>true</static>
-      <pose>5 -1.25 2.5 0 0 0</pose>
+      <pose>-4 0 3 0 0 0</pose>
       <link name='link'>
         <collision name='collision'>
-          <geometry>
-            <box><size>0.2 4 5</size></box>
-          </geometry>
+          <geometry><box><size>0.2 18.2 6</size></box></geometry>
         </collision>
         <visual name='visual'>
-          <geometry>
-            <box><size>0.2 4 5</size></box>
-          </geometry>
+          <geometry><box><size>0.2 18.2 6</size></box></geometry>
+          <material>
+            <ambient>0.5 0.5 0.55 1</ambient>
+            <diffuse>0.5 0.5 0.55 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name='boundary_front'>
+      <static>true</static>
+      <pose>16 0 3 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><box><size>0.2 18.2 6</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><box><size>0.2 18.2 6</size></box></geometry>
+          <material>
+            <ambient>0.5 0.5 0.55 1</ambient>
+            <diffuse>0.5 0.5 0.55 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name='boundary_right'>
+      <static>true</static>
+      <pose>6 -9 3 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><box><size>20.2 0.2 6</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><box><size>20.2 0.2 6</size></box></geometry>
+          <material>
+            <ambient>0.5 0.5 0.55 1</ambient>
+            <diffuse>0.5 0.5 0.55 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name='boundary_left'>
+      <static>true</static>
+      <pose>6 9 3 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><box><size>20.2 0.2 6</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><box><size>20.2 0.2 6</size></box></geometry>
+          <material>
+            <ambient>0.5 0.5 0.55 1</ambient>
+            <diffuse>0.5 0.5 0.55 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ============= Obstacle type 1: wall with a gap (x=3) ============= -->
+    <!-- Gap centered at y=0, width 1.5m (edges at y=-0.75 and y=0.75). -->
+
+    <model name='wall_gap_right'>
+      <static>true</static>
+      <pose>3 -3.375 2.5 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><box><size>0.2 5.25 5</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><box><size>0.2 5.25 5</size></box></geometry>
           <material>
             <ambient>0.6 0.6 0.6 1</ambient>
             <diffuse>0.6 0.6 0.6 1</diffuse>
@@ -194,19 +274,15 @@
       </link>
     </model>
 
-    <model name='wall_right'>
+    <model name='wall_gap_left'>
       <static>true</static>
-      <pose>5 5.75 2.5 0 0 0</pose>
+      <pose>3 3.375 2.5 0 0 0</pose>
       <link name='link'>
         <collision name='collision'>
-          <geometry>
-            <box><size>0.2 4 5</size></box>
-          </geometry>
+          <geometry><box><size>0.2 5.25 5</size></box></geometry>
         </collision>
         <visual name='visual'>
-          <geometry>
-            <box><size>0.2 4 5</size></box>
-          </geometry>
+          <geometry><box><size>0.2 5.25 5</size></box></geometry>
           <material>
             <ambient>0.6 0.6 0.6 1</ambient>
             <diffuse>0.6 0.6 0.6 1</diffuse>
@@ -215,22 +291,18 @@
       </link>
     </model>
 
-    <!-- ===================== 障礙物：圓柱 ===================== -->
-    <!-- 兩根圓柱，放在牆後面，測試繞障 -->
+    <!-- ============= Obstacle type 2: cylinder slalom (x=6) ============= -->
+    <!-- Three staggered cylinders forcing a weaving path. -->
 
     <model name='cylinder_1'>
       <static>true</static>
-      <pose>8 1 2.5 0 0 0</pose>
+      <pose>5.5 -1.5 2.5 0 0 0</pose>
       <link name='link'>
         <collision name='collision'>
-          <geometry>
-            <cylinder><radius>0.3</radius><length>5</length></cylinder>
-          </geometry>
+          <geometry><cylinder><radius>0.3</radius><length>5</length></cylinder></geometry>
         </collision>
         <visual name='visual'>
-          <geometry>
-            <cylinder><radius>0.3</radius><length>5</length></cylinder>
-          </geometry>
+          <geometry><cylinder><radius>0.3</radius><length>5</length></cylinder></geometry>
           <material>
             <ambient>0.8 0.2 0.2 1</ambient>
             <diffuse>0.8 0.2 0.2 1</diffuse>
@@ -241,20 +313,70 @@
 
     <model name='cylinder_2'>
       <static>true</static>
-      <pose>8 -1.2 2.5 0 0 0</pose>
+      <pose>6.5 0.3 2.5 0 0 0</pose>
       <link name='link'>
         <collision name='collision'>
-          <geometry>
-            <cylinder><radius>0.3</radius><length>5</length></cylinder>
-          </geometry>
+          <geometry><cylinder><radius>0.3</radius><length>5</length></cylinder></geometry>
         </collision>
         <visual name='visual'>
-          <geometry>
-            <cylinder><radius>0.3</radius><length>5</length></cylinder>
-          </geometry>
+          <geometry><cylinder><radius>0.3</radius><length>5</length></cylinder></geometry>
           <material>
             <ambient>0.8 0.2 0.2 1</ambient>
             <diffuse>0.8 0.2 0.2 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name='cylinder_3'>
+      <static>true</static>
+      <pose>5.5 2.0 2.5 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><cylinder><radius>0.3</radius><length>5</length></cylinder></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><cylinder><radius>0.3</radius><length>5</length></cylinder></geometry>
+          <material>
+            <ambient>0.8 0.2 0.2 1</ambient>
+            <diffuse>0.8 0.2 0.2 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ============= Obstacle type 3: box gate (x=9) ============= -->
+    <!-- Two square pillars leaving a 2m gap centered at y=0. -->
+
+    <model name='box_right'>
+      <static>true</static>
+      <pose>9 -1.6 2.5 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><box><size>1.2 1.2 5</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><box><size>1.2 1.2 5</size></box></geometry>
+          <material>
+            <ambient>0.2 0.3 0.8 1</ambient>
+            <diffuse>0.2 0.3 0.8 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name='box_left'>
+      <static>true</static>
+      <pose>9 1.6 2.5 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><box><size>1.2 1.2 5</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><box><size>1.2 1.2 5</size></box></geometry>
+          <material>
+            <ambient>0.2 0.3 0.8 1</ambient>
+            <diffuse>0.2 0.3 0.8 1</diffuse>
           </material>
         </visual>
       </link>
