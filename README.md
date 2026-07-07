@@ -62,7 +62,7 @@ Before the first run, PX4 needs Offboard-without-RC enabled once
 
 ## Documentation
 
-### What each file does
+### files
 
 | Path | Role |
 |------|------|
