@@ -1,58 +1,166 @@
-# holo_lab — instrumented + automated HOLO-DWA runner
+# holo_lab — tuning a holonomic DWA obstacle-avoidance planner
 
-A self-contained harness for iterating on the **holonomic DWA** config. It
-wraps the normal `scanner.py` + `dwa_core.py` flight stack with two things:
+`holo_lab` is the **experiment harness and optimized planner** for the
+[HOLO-DWA](https://github.com/blar-tw/HOLO-DWA) project: a simulated PX4
+multirotor that flies from a start point to a goal through a cluttered arena
+using nothing but a **2D LiDAR** and a **holonomic Dynamic Window Approach**
+local planner — no global map, no pre-planned path, purely reactive.
 
-1. **Instrumentation** — every 20 Hz control tick is logged to a CSV, and each
-   navigation run gets a one-line JSON summary. All data lands in
-   [`logs/`](logs/), nothing is written outside this folder.
-2. **Automation** — one command flies the drone home and starts a **fresh
-   logged run without restarting PX4 / Gazebo / the bridge**. Bringing that
-   heavy stack up takes ~30 s; a reset takes a few seconds.
+This folder is self-contained. It carries its own copy of the planner
+(`dwa_core.py`) and flight node (`scanner_lab.py`) plus tooling to fly the
+drone in Gazebo, log every control tick, and iterate on the planner's scoring
+function **without ever touching the repo-root originals**.
 
-Everything the harness needs is copied in here (`dwa_core.py`,
-`scanner_lab.py`, `run_lab.sh`), so it runs independently of the repo-root
-`scanner.py` / `run.sh` and never modifies them.
+## What problem it solves
 
-> Scope: this is only the `holonomic DWA` case. No control groups / A-B configs
-> yet — just make this one instrumented and repeatable.
+The drone must cross an arena and reach the goal at `(12, 0)` while weaving
+through three obstacle types in sequence — a **wall with a 1.5 m gap**, a
+**three-cylinder slalom**, and a **two-pillar gate** — all inside a boundary
+wall. It only ever sees the current LiDAR scan, so it has to decide the next
+velocity from local information alone.
 
-## Files
+```
+   y (North)
+   +9 ┌────────────────────────────────────────────────┐
+      │        ###        ######                        │   # = obstacle
+      │        ###        ######                        │   S = start (0,0)
+    0 │ S..........  ..........  ..............  E G     │   . = flown path
+      │        ###o ###          ######                 │   G = goal (12,0)
+      │        wall  cylinders    pillar-gate            │   E = end
+   -9 └────────────────────────────────────────────────┘
+      x=-4      x=3    x=5-6      x=9        x=12   (East)
+```
+*(schematic — real trajectory maps are rendered by [`report.py`](report.py))*
 
-| File | Role |
-|------|------|
-| `scanner_lab.py` | Instrumented copy of `scanner.py`: per-tick CSV, per-run JSON, `/holo_lab/reset` service, `RETURN_HOME` state, `n_runs` batch loop. |
-| `dwa_core.py` | Copy of the planner (imported by `scanner_lab.py`). Edit *this* copy to tune the lab without touching the original. |
-| `run_lab.sh` | Launcher (same 4-pane tmux stack as `../run.sh`) + `reset` (restart scanner, drone flies home) / `reset-soft` / `kill` subcommands. Env: `NO_ATTACH=1` (script-friendly), `HEADLESS=1` (no gz GUI). |
-| `exp.sh` | Experiment driver on top of `run_lab.sh`: `up` (fresh stack) / `collect <name>` (wait for the batch, archive to `logs/exp/<name>/`) / `go <name>` (reset + collect) / `status` / `down`. |
-| `analyze.py` | Dependency-free log reader (per-run table from a `summary.jsonl`, or per-run tick stats from a session CSV). |
-| `report.py` | Session CSV → ASCII trajectory map over the arena + per-run diagnostics (collision ticks, infeasible spans, stalls, score stats). No GUI needed. |
-| `sim_offline.py` | No-ROS/no-Gazebo offline sim of the same arena (ray-cast LiDAR + first-order velocity tracking) for pre-screening scoring changes in seconds (`--sweep`, `--noise`, `--map`). Not a substitute for Gazebo. |
-| `EXPERIMENTS.md` | Iteration log: motivation → change → result → decision, one entry per experiment. |
-| `logs/` | All output. `session_*.csv` (per-tick timeseries) + `summary.jsonl` (one line per run) + `exp/<name>/` archives. Git-ignored. |
+## Result
+
+Starting from the repo-root planner as **baseline**, the scoring function was
+rewritten over five iterations. Verified across **three independent 5-run
+batches, each on a fresh simulator stack**:
+
+| | reached | collisions | min. obstacle distance | avg. time |
+|---|---:|---:|---:|---:|
+| **baseline** | 1 / 5 | 44+ episodes | contact (0.0 m) | 90 s (mostly timeout) |
+| **optimized** | **15 / 15** | **0** | **0.66 m** | **18 s** |
+
+Every control tick fits the 20 Hz budget with ~1.7 ms of compute (3 % of
+50 ms). The full before→after story — each failure mode, its root cause, and
+the fix — is in **[EXPERIMENTS.md](EXPERIMENTS.md)**.
+
+## How the planner scores a velocity
+
+Each 20 Hz tick, DWA samples the reachable `(vx, vy)` velocities (the "dynamic
+window", bounded by acceleration limits), rolls each one forward, discards any
+that would hit an obstacle or exceed a safe braking speed, and scores the rest:
+
+```
+score = heading_weight   · heading      (cosine of angle to the goal)
+      + clearance_weight  · clearance    (obstacle distance along the heading)
+      + velocity_weight   · velocity     (goal-directed speed, with a floor)
+```
+
+Trajectories that pass near the goal instead get a dominating **terminal
+basin** score that steers to the center at a braking-curve speed. The four
+changes that took it from 1/5 to 15/15 (planner structure — the `(vx, vy)`
+window, feasibility mask, and forward prediction — is untouched):
+
+1. **LiDAR de-mirroring** *(the real root cause)*: a Gazebo `gpu_lidar` scans
+   z-up (`+angle` = body **left**) but the planner's frame is NED/FRD
+   (`+angle` = body **right**). Consuming the scan raw mirrors every obstacle
+   across the body axis, so the drone dodged phantom obstacles straight into
+   the real cylinders. Fixed with `flip_y=True` in `scan_to_world_points`.
+2. **Direction-based clearance**: the clearance term probes a fixed distance
+   along the candidate's heading instead of along its (speed-dependent)
+   predicted arc, so it no longer rewards creeping and stops the drone inching
+   into obstacles.
+3. **Continuous terminal basin + braking-curve arrival**: replaces a binary
+   "passed within 0.5 m" bonus that gave zero pull on a fast fly-by, which had
+   the drone orbiting the goal forever.
+4. **Blended velocity reward**: goal-directed component in open space (kills
+   the diagonal drift a raw-speed reward causes) with a scalar floor so the
+   drone still slides along walls to find gaps instead of deadlocking.
+
+> ⚠️ The **repo-root `scanner.py` / `dwa_core.py` still carry the LiDAR mirror
+> bug** (fix #1). It was left untouched here by scope; port `flip_y` over there
+> too.
 
 ## Quick start
 
 ```bash
 cd ~/ws/src/HOLO-DWA/holo_lab
 
-# 1. bring the whole stack up ONCE (default goal 12,0)
+# bring the whole stack up ONCE (default goal 12,0), watch it fly in Gazebo
 ./run_lab.sh
-./run_lab.sh 8.0 -3.0          # or a custom goal_x goal_y
+./run_lab.sh 8.0 -3.0           # or a custom goal_x goal_y
 
-# 2. iterate: fly home + start a new logged run, stack stays up
+# fly a fresh logged run without relaunching PX4/gz (picks up code edits)
 ./run_lab.sh reset
 
-# 3. read the results
-./analyze.py                    # table of all runs from summary.jsonl
-./analyze.py logs/session_*.csv # per-run tick stats from one session
+# read the results
+./analyze.py                    # per-run table (reached / collisions / time)
+./report.py                     # ASCII trajectory map of the newest run
 
-# 4. tear everything down
+# tear everything down
 ./run_lab.sh kill
 ```
 
-`reset` **restarts only the scanner node** (PX4 / gz / bridge keep running) and
-the fresh node flies the drone home before the next run — see below.
+Prerequisites are the parent project's (ROS 2 Humble, PX4 v1.14.4 + Gazebo,
+the `ros_gz` bridge, `tmux`, `numpy`) — see the
+[root README](../README.md) and [docs/installation.md](../docs/installation.md).
+
+## Reproduce the verification
+
+```bash
+./exp.sh up                     # fresh detached headless stack, N_RUNS=5
+EXP_TIMEOUT=700 ./exp.sh collect myrun
+cat logs/exp/myrun/report.txt   # per-run table + ASCII trajectory maps
+```
+
+Each experiment archives everything (session CSV, summary, report, config
+snapshot) under `logs/exp/<name>/`; the ten committed archives
+(`baseline`, `iter1`–`iter5c`, `verifyA/B`, `final5`) are the evidence behind
+the results table.
+
+## Files
+
+| File | Role |
+|------|------|
+| `dwa_core.py` | **The optimized planner.** Vectorized holonomic DWA search + scoring. Frame-agnostic, no ROS. |
+| `scanner_lab.py` | Flight node: PX4 offboard control, LiDAR intake, the `dwa_config` block, per-tick CSV + per-run JSON logging, `RETURN_HOME` / batch automation. |
+| `run_lab.sh` | Launcher (4-pane tmux: PX4+gz / agent / bridge / node) + `reset` / `kill` / `gui` / `play` subcommands. Env: `HEADLESS=1`, `NO_ATTACH=1`, `N_RUNS`, `RUN_TIMEOUT`, `RECORD=1`. |
+| `exp.sh` | Experiment driver: `up` / `collect <name>` / `go <name>` / `status` / `down`. Archives each batch to `logs/exp/`. |
+| `analyze.py` | Dependency-free reader: per-run table from a `summary.jsonl`, or tick stats from a session CSV. |
+| `report.py` | Session CSV → ASCII arena map with the flown path + diagnostics (collisions, infeasible spans, stalls, score stats). No GUI needed. |
+| `sim_offline.py` | No-ROS/no-Gazebo sim of the same arena (ray-cast LiDAR + velocity tracking) to pre-screen scoring changes in **seconds** (`--sweep`, `--noise`, `--map`). Not a substitute for Gazebo. |
+| `verify_frame.py` | One-shot check that the LiDAR handedness (fix #1) is correct against the known arena geometry. |
+| `replay_demo.py` + `replay_pose.cpp` | Puppet-replays a logged flight in a Gazebo GUI for demo recording — see [Recording a demo video](#recording-a-demo-video-wsl2). |
+| `EXPERIMENTS.md` | The iteration log: motivation → change → result → decision, one entry per experiment. |
+| `logs/exp/<name>/` | Committed experiment archives. Loose `logs/*.csv` / `summary.jsonl` are scratch and git-ignored. |
+
+---
+
+## Recording a demo video (WSL2)
+
+Measured on this box: attaching **anything** to the live sim degrades the
+flight — the integrated GUI, a `gz sim -g` client, or even `--record` state
+logging all turn the clean 18 s run into 55–90 s of wandering (same-day
+control: pure headless 18.0 s / 11.9 m). So never record the flight live;
+replay it afterwards, where render load can't affect the already-flown path:
+
+```bash
+# 1. fly ONE clean run, headless (the per-tick CSV is the recording)
+NO_ATTACH=1 HEADLESS=1 N_RUNS=1 ./run_lab.sh
+./analyze.py                 # wait for "reached", sanity-check the run
+./run_lab.sh kill
+
+# 2. replay the trajectory in a Gazebo GUI
+./replay_demo.py --loop      # newest CSV; add --speed 0.5 for slow-mo
+# in the GUI: right-click the drone -> Follow, then screen-record (Win+G)
+```
+
+`RECORD=1 ./run_lab.sh` + `./run_lab.sh play` (native gz state-log playback)
+also exist, but the recording overhead itself spoils the flight being
+recorded — prefer `replay_demo.py`.
 
 ## Unattended batches
 
@@ -73,8 +181,6 @@ COLLISION_DIST=0.25 ./run_lab.sh           # tighter collision threshold (m)
 
 ## How reset works (drone returns to origin, PX4/gz/bridge stay up)
 
-There are two ways to start a fresh run without touching the heavy stack:
-
 ### `./run_lab.sh reset` — restart the scanner node (recommended)
 
 Kills just `scanner_lab.py` and relaunches it in its tmux pane; PX4, Gazebo and
@@ -89,29 +195,16 @@ via DWA first**, then starts a new logged run:
                                                    NAVIGATE ◄─ back at origin
 ```
 
-This is the sturdy option: a brand-new process can't get stuck in a bad state,
-and the session log is preserved (each restart writes a new `session_*.csv`).
-While the scanner is down for ~1 s, PX4's offboard-loss failsafe just holds the
-drone in place; the new node then re-engages offboard and brings it home.
-
-**Why not the in-node service?** The obstacles are 5 m tall and the drone flies
-at 2 m, so returning means threading back through the same gaps with DWA — which
-can stall in a local minimum (see the repo's `docs/discussion.md`). A process
-restart sidesteps that failure mode. If you still want the lighter, no-restart
-path, it's there as:
+A brand-new process can't get stuck in a bad state, and edits to
+`dwa_core.py` / `scanner_lab.py` are picked up on restart (the new process
+re-imports them) — no PX4/gz relaunch needed. While the scanner is down for
+~1 s, PX4's offboard-loss failsafe just holds the drone in place.
 
 ### `./run_lab.sh reset-soft` — in-node `/holo_lab/reset` service
 
 Sends `ros2 service call /holo_lab/reset std_srvs/srv/Trigger`. The running node
 switches to a `RETURN_HOME` state (DWA toward the origin) and, on arrival, starts
 a new run. No process restart, but it can get stuck returning; prefer `reset`.
-
-### Unattended batches vs. reset
-
-`N_RUNS>1` still auto-returns home between runs **inside the one node** (same
-`RETURN_HOME` mechanism as `reset-soft`), which is fine when runs succeed. For
-hand-driven iteration where a run may end badly, `./run_lab.sh reset` is more
-reliable.
 
 ## What gets logged
 
@@ -136,31 +229,17 @@ the search still fits the 20 Hz (50 ms) budget.
 
 Every run records whether it hit anything. The signal is the **nearest LiDAR
 return**: when it drops below `collision_dist` (default **0.3 m**, roughly the
-drone body), that tick is flagged (`collision=1` in the CSV) and, on the rising
-edge, counted as one collision **episode**. Per run you get `collided` (bool),
-`collisions` (episode count), `min_dist_m` (closest the drone ever got), and
-`first_collision` (`{t, pos_ned, min_dist_m}`). Live `[COLLISION] ...` warnings
-also print to the scanner pane.
-
-Tune the threshold at launch:
-
-```bash
-COLLISION_DIST=0.25 ./run_lab.sh      # stricter contact threshold
-```
-
-This is a **proxy**, not ground truth: the 2D LiDAR sits at body height, so it
-catches the arena's walls/cylinders/pillars well, but (a) it can miss a hit if
-the drone ends up *inside* an obstacle past the sensor's `range_min` (0.1 m),
-and (b) it only sees the scan plane. If you later want true contacts, add a
-Gazebo `contact` sensor to the `x500_lidar_2d` model and bridge its topic — a
-heavier change, deliberately skipped here to keep the instrumentation simple.
+drone body), that tick is flagged (`collision=1`) and, on the rising edge,
+counted as one collision **episode**. Per run you get `collided`, `collisions`
+(episode count), `min_dist_m` (closest the drone ever got), and
+`first_collision`. This is a **proxy**, not a Gazebo contact sensor: the 2D
+LiDAR sits at body height, so it catches walls/cylinders/pillars well but only
+sees the scan plane.
 
 ## Tuning
 
-Edit `holo_lab/dwa_core.py` (the copy) or the `dwa_config` block near the top of
-`scanner_lab.py`, then `./run_lab.sh reset` to fly a fresh run with the change.
-Because `reset` restarts the scanner *process*, edits to `dwa_core.py` /
-`scanner_lab.py` are picked up (the new process re-imports them) — no PX4/gz
-relaunch needed. The goal and `n_runs` are baked into the launch args (and into
-the reset helper), so changing those needs a full `./run_lab.sh` relaunch; that
-is why `reset` re-uses the same goal.
+Edit `dwa_core.py` (the scoring/`Config` defaults) or the `dwa_config` block in
+`scanner_lab.py`, then `./run_lab.sh reset` to fly a fresh run with the change
+— or pre-screen it offline first with `./sim_offline.py --sweep`. The goal and
+`n_runs` are baked into the launch args, so changing those needs a full
+`./run_lab.sh` relaunch.

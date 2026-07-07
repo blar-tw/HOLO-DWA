@@ -226,7 +226,13 @@ def main():
     else:
         paths = sorted(glob.glob(os.path.join(LOG_DIR, "session_*.csv")))[-1:]
     if not paths:
-        print("no session CSVs found")
+        # Fresh clone / after cleanup there are no loose sessions yet - point
+        # at the committed experiment archives instead of a dead end.
+        archived = sorted(glob.glob(os.path.join(LOG_DIR, "exp", "*", "session_*.csv")))
+        print("no loose session CSVs in logs/ - fly one with ./run_lab.sh, "
+              "or view an archived run:")
+        for a in archived:
+            print(f"  ./report.py {os.path.relpath(a, LAB_DIR)}")
         return
     for p in paths:
         print(f"===== {os.path.basename(p)} =====")

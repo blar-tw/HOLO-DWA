@@ -212,6 +212,47 @@ EXP_TIMEOUT=700 ./exp.sh collect <name>
 cat logs/exp/<name>/report.txt # 表格 + ASCII 軌跡圖
 ```
 
+---
+
+## 後記 (2026-07-07):demo 錄影與「GUI 為什麼變慢」
+
+### 現象與對照實驗
+
+使用者手動 `./run_lab.sh`(帶 GUI)跑出 50~90s 的繞路 run,懷疑
+run_lab 不如 exp。逐一對照(同一天、同一機器、同一程式碼):
+
+| 模式 | 結果 |
+|------|------|
+| 整合 GUI (`./run_lab.sh`) | 59.9s / 41m,追蹤比 0.61 |
+| 外掛 GUI (`gz sim -g`) | 90s timeout / 78m |
+| gz 錄影 (`--record-path`) | 54.9s、88.6s / 42~83m(追蹤比卻 0.87!) |
+| **純 headless(對照組)** | **18.0s / 11.9m / eff 1.019 — 完美** |
+
+結論:**live 模擬掛上任何額外客戶端或狀態錄影都會讓飛行劣化**
+(機制未完全釐清 — 追蹤比正常但路線遊蕩,掃描率反而更高 20Hz vs 9Hz;
+總之是 WSL2 上 gz server 的負載互動,非演算法問題)。exp.sh 與
+run_lab.sh 邏輯相同,差別只在 HEADLESS=1。
+
+### 解法一(演算法穩健化):goal_approach_a = 0.5
+
+原煞車曲線用 brake_a_max=1.0 → 離目標 1.6m 前都維持全速,最後 1m 急煞,
+環境雜訊一大就擦圈過站、多繞一圈。新增 `Config.goal_approach_a=0.5`:
+~2.5m 外開始減速、以 ~0.7 m/s 進圈。離線 nominal 只慢 0.5s(14.4s),
+noise 0.1 十種子 10/10。Gazebo 重驗證:見 `logs/exp/final5/`。
+
+### 解法二(錄影正道):replay_demo.py 傀儡回放
+
+飛行一律 headless(乾淨 18s,CSV 就是完整 20Hz 錄影),事後用
+`replay_demo.py` 在 GUI 世界裡以 set_pose 讓靜態無人機模型沿軌跡重演
+(C++ 常駐 streamer,單次 set_pose ~ms 級;`gz service` 子程序一次要
+280ms 不可行)。回放時渲染負載傷不到已飛完的軌跡。`--speed`、`--loop`。
+
+死路備忘:
+- SDF actor + link + trajectory:gz-sim7 SceneBroadcaster **segfault**。
+- `RECORD=1` + `./run_lab.sh play`(gz 原生 state log):功能可用,
+  但錄影本身就會弄髒被錄的那趟飛行 — 已保留但不建議。
+- gz python transport bindings:Garden 上未安裝(只有 gz.sim7/math7)。
+
 已知基礎設施風險(與演算法無關):偶發的 gz RTF 崩潰。健康批次的
 特徵很好認:TAKEOFF 應在 ~10 wall 秒內完成;若 > 30 秒,重啟 stack。
 

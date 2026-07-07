@@ -19,7 +19,23 @@
 #                                #   bridge stay up. Sturdiest way to repeat.
 #   ./run_lab.sh reset-soft      # in-node reset via service (no restart; can
 #                                #   stall if DWA gets stuck returning)
+#   ./run_lab.sh gui             # attach a Gazebo GUI window to a RUNNING
+#                                #   headless stack (physics keeps running if
+#                                #   the window is closed - but on this WSL2
+#                                #   box ANY live rendering degrades tracking;
+#                                #   for clean footage use RECORD/play below)
+#   ./run_lab.sh play [dir]      # open a Gazebo GUI playing back a recording
+#                                #   (defaults to the newest one). Rendering
+#                                #   cost cannot affect the already-recorded
+#                                #   flight - this is the way to capture a
+#                                #   full-speed demo video on WSL2.
 #   ./run_lab.sh kill            # tear the whole session down
+#
+# Demo recording (state logging, no rendering while flying):
+#   RECORD=1 ./run_lab.sh        # fly with gz state-logging into
+#                                #   logs/records/<timestamp>/ (forces the
+#                                #   headless server path)
+#   ./run_lab.sh play            # then replay it in the GUI and screen-record
 #
 # Batch / automation env vars (read at launch):
 #   N_RUNS        navigate runs to fly unattended (<=0 = loop forever)  [1]
@@ -50,6 +66,7 @@ RUN_TIMEOUT="${RUN_TIMEOUT:-0}"
 COLLISION_DIST="${COLLISION_DIST:-0.3}"   # LiDAR min-dist below this = collision
 NO_ATTACH="${NO_ATTACH:-0}"               # 1 = leave the tmux session detached
 HEADLESS="${HEADLESS:-0}"                 # 1 = gz server only (no GUI)
+RECORD="${RECORD:-0}"                     # 1 = gz state-log the flight for ./run_lab.sh play
 
 LIDAR_TOPIC="/world/${PX4_GZ_WORLD}/model/x500_lidar_2d_0/link/link/sensor/lidar_2d_v2/scan"
 
@@ -103,6 +120,29 @@ if [[ "${1:-}" == "reset" || "${1:-}" == "rerun" ]]; then
     echo "ERROR: could not respawn pane ${PANE} - is the session still alive?" >&2; exit 1; }
   echo "Done. Watch the scanner pane: drone returns to origin, then navigates."
   exit 0
+fi
+
+if [[ "${1:-}" == "play" ]]; then
+  # Replay a state recording in the GUI. The flight already happened at full
+  # speed headless, so render load here only affects playback smoothness,
+  # never the trajectory - screen-record this window for demo footage.
+  REC_DIR="${2:-$(ls -dt "${LAB_DIR}"/logs/records/*/ 2>/dev/null | head -1)}"
+  [[ -n "${REC_DIR}" && -f "${REC_DIR%/}/state.tlog" ]] || {
+    echo "ERROR: no recording found (fly one first: RECORD=1 ./run_lab.sh)" >&2; exit 1; }
+  echo "Playing back ${REC_DIR} (pause/seek with the bottom bar; close window to exit)..."
+  exec gz sim --playback "${REC_DIR%/}"
+fi
+
+if [[ "${1:-}" == "gui" ]]; then
+  # Attach a Gazebo GUI client to the already-running (headless) server.
+  # Rendering runs in this separate process, so the physics/sensor loop in
+  # the server keeps full speed - on WSL2 the integrated GUI costs enough
+  # real-time factor that PX4 velocity tracking visibly degrades (measured:
+  # displacement/commanded speed ratio 0.61 with GUI vs 0.87 headless).
+  pgrep -f 'gz sim' >/dev/null 2>&1 || {
+    echo "ERROR: no gz server running - launch first: HEADLESS=1 ./run_lab.sh" >&2; exit 1; }
+  echo "Attaching Gazebo GUI to the running server (close the window to detach)..."
+  exec gz sim -g
 fi
 
 if [[ "${1:-}" == "reset-soft" ]]; then
@@ -161,8 +201,29 @@ echo "  logs          -> ${LAB_DIR}/logs/"
 P_SIM="$(tmux new-session -d -P -F '#{pane_id}' -s "${SESSION}" -n sim -c "${PX4_DIR}")"
 SIM_ENV="PX4_GZ_WORLD=${PX4_GZ_WORLD}"
 [[ "${HEADLESS}" == "1" ]] && SIM_ENV="${SIM_ENV} HEADLESS=1"
-tmux send-keys -t "${P_SIM}" \
-  "${SIM_ENV} make px4_sitl gz_x500_lidar_2d" C-m
+if [[ "${RECORD}" == "1" ]]; then
+  # Start OUR gz server first, with state logging. PX4's simulator rc detects
+  # the already-running world (via its /clock topic) and just spawns the
+  # vehicle into it instead of launching its own server, so the whole flight
+  # lands in the .tlog. Rendering still off: gpu_lidar uses EGL offscreen.
+  REC_DIR="${LAB_DIR}/logs/records/$(date +%Y%m%d_%H%M%S)"
+  mkdir -p "${REC_DIR}"
+  WORLD_FILE="${PX4_DIR}/Tools/simulation/gz/worlds/${PX4_GZ_WORLD}.sdf"
+  [[ -f "${WORLD_FILE}" ]] || fail "world file not found: ${WORLD_FILE}"
+  # PX4's gz_env.sh puts the PX4 model dir on GZ_SIM_RESOURCE_PATH; without
+  # it this server cannot resolve x500_lidar_2d when PX4 asks it to spawn.
+  GZ_ENV="${PX4_DIR}/build/px4_sitl_default/rootfs/gz_env.sh"
+  [[ -f "${GZ_ENV}" ]] || fail "gz_env.sh not found (build PX4 once first): ${GZ_ENV}"
+  echo "  RECORDING     -> ${REC_DIR} (replay: ./run_lab.sh play)"
+  tmux send-keys -t "${P_SIM}" \
+    "source '${GZ_ENV}'; gz sim --verbose=1 -r -s --headless-rendering --record-path '${REC_DIR}' '${WORLD_FILE}'" C-m
+  P_PX4="$(tmux split-window -t "${P_SIM}" -h -P -F '#{pane_id}' -c "${PX4_DIR}")"
+  tmux send-keys -t "${P_PX4}" \
+    "sleep 6; ${SIM_ENV} make px4_sitl gz_x500_lidar_2d" C-m
+else
+  tmux send-keys -t "${P_SIM}" \
+    "${SIM_ENV} make px4_sitl gz_x500_lidar_2d" C-m
+fi
 
 # Pane B: Micro XRCE-DDS Agent
 P_AGENT="$(tmux split-window -t "${P_SIM}" -h -P -F '#{pane_id}' -c "${WS_DIR}")"
