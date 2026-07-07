@@ -135,7 +135,7 @@ section 1:
 | `vx/vy_resolution` | 0.1 | velocity-grid resolution (m/s) |
 | `robot_radius` | 0.2 | inflation radius (m) |
 | `goal_threshold` | 0.5 | arrival radius (m) |
-| `heading/clearance/velocity_weight` | 0.2 / 0.5 / 0.3 | score weights (defaults, not overridden) |
+| `heading/clearance/velocity_weight` | 0.2 / 0.2 / 0.6 | score weights (defaults, not overridden) |
 | `velocity_mode` | `scalar` | velocity-reward mode (default) |
 
 Node parameters (ROS 2): `goal_x`, `goal_y` (Gazebo world coords, default
