@@ -160,16 +160,5 @@ types in sequence before the goal at `(12, 0)`:
 ```
 
 Adding your own obstacles (copy-paste SDF blocks, or spawn at runtime with
-`gz service`) is described in [note.md](note.md).
+`gz service`) is described in [gz_extra/usage.md](../gz_extra/usage.md).
 
-## 7. Roadmap
-
-- [x] DWA velocity planning wired into `scanner.py` (replaced hover-only logic).
-- [x] Holonomic DWA algorithm consolidated into `dwa_core.py` with notes.
-- [ ] `package.xml` + launch file so the whole stack comes up with
-      `ros2 launch`, replacing the tmux script.
-- [ ] Hardware / real-world validation: LiDAR mounting offset (currently
-      assumed coincident with the body origin), and the goal-to-world
-      coordinate mapping.
-- [ ] Add a global planner (A* / RRT) above DWA to remove the local-minimum
-      failure modes in [discussion.md](discussion.md).

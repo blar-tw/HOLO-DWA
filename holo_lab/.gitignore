@@ -5,13 +5,10 @@
 # logs/exp/<name>/ are committed on purpose - they are the permanent record.
 logs/*.csv
 logs/*.jsonl
-# scratch bookkeeping / build artifacts written by run_lab.sh / exp.sh / replay_demo.py
+# scratch bookkeeping written by run_lab.sh / exp.sh
 logs/.scan_pane
 logs/.restart_scanner.sh
 logs/.exp_marker
-logs/.replay_pose
-# gz state-log recordings (RECORD=1); large binaries, regenerated on demand
-logs/records/
 !logs/.gitkeep
 __pycache__/
 *.pyc

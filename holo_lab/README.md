@@ -117,50 +117,74 @@ cat logs/exp/myrun/report.txt   # per-run table + ASCII trajectory maps
 ```
 
 Each experiment archives everything (session CSV, summary, report, config
-snapshot) under `logs/exp/<name>/`; the ten committed archives
+snapshot) under `logs/exp/<name>/`; the twelve committed archives
 (`baseline`, `iter1`–`iter5c`, `verifyA/B`, `final5`) are the evidence behind
 the results table.
 
-## Files
+## What each file does
 
-| File | Role |
-|------|------|
-| `dwa_core.py` | **The optimized planner.** Vectorized holonomic DWA search + scoring. Frame-agnostic, no ROS. |
-| `scanner_lab.py` | Flight node: PX4 offboard control, LiDAR intake, the `dwa_config` block, per-tick CSV + per-run JSON logging, `RETURN_HOME` / batch automation. |
-| `run_lab.sh` | Launcher (4-pane tmux: PX4+gz / agent / bridge / node) + `reset` / `kill` / `gui` / `play` subcommands. Env: `HEADLESS=1`, `NO_ATTACH=1`, `N_RUNS`, `RUN_TIMEOUT`, `RECORD=1`. |
-| `exp.sh` | Experiment driver: `up` / `collect <name>` / `go <name>` / `status` / `down`. Archives each batch to `logs/exp/`. |
-| `analyze.py` | Dependency-free reader: per-run table from a `summary.jsonl`, or tick stats from a session CSV. |
-| `report.py` | Session CSV → ASCII arena map with the flown path + diagnostics (collisions, infeasible spans, stalls, score stats). No GUI needed. |
-| `sim_offline.py` | No-ROS/no-Gazebo sim of the same arena (ray-cast LiDAR + velocity tracking) to pre-screen scoring changes in **seconds** (`--sweep`, `--noise`, `--map`). Not a substitute for Gazebo. |
-| `verify_frame.py` | One-shot check that the LiDAR handedness (fix #1) is correct against the known arena geometry. |
-| `replay_demo.py` + `replay_pose.cpp` | Puppet-replays a logged flight in a Gazebo GUI for demo recording — see [Recording a demo video](#recording-a-demo-video-wsl2). |
-| `EXPERIMENTS.md` | The iteration log: motivation → change → result → decision, one entry per experiment. |
-| `logs/exp/<name>/` | Committed experiment archives. Loose `logs/*.csv` / `summary.jsonl` are scratch and git-ignored. |
+The pieces fit together as: **`dwa_core.py`** (the algorithm) runs inside
+**`scanner_lab.py`** (the flight node), driven by **`run_lab.sh`** / **`exp.sh`**
+(execution), producing **`logs/`** (data), read back with **`analyze.py`** /
+**`report.py`** / **`sim_offline.py`** (analysis). The reasoning is logged in
+**`EXPERIMENTS.md`**.
 
----
+### Core algorithm (the heart of the project)
 
-## Recording a demo video (WSL2)
+- **`dwa_core.py`** — **the optimized planner.** Each control tick it samples
+  every reachable `(vx, vy)` in the dynamic window, rolls each forward,
+  discards any that would hit an obstacle or exceed a safe braking speed, and
+  scores the rest with the three weighted terms (heading / clearance /
+  velocity) plus the terminal-basin score near the goal. All four winning
+  fixes live here (LiDAR `flip_y`, direction-based clearance, terminal basin,
+  blended velocity). Pure math, no ROS — so the offline sim can import it
+  directly.
+- **`scanner_lab.py`** — **the flight node** (largest file). Wires `dwa_core`
+  to the real drone: PX4 offboard control (takeoff / navigate / land),
+  converting LiDAR scans into obstacle points, the state machine
+  (`INIT → TAKEOFF → NAVIGATE → RETURN_HOME → HOLD`), and **all logging**
+  (per-tick CSV, per-run JSON). The `dwa_config` block near the top is where
+  you set the parameters (`v_max`, the weights, `robot_radius`, …).
 
-Measured on this box: attaching **anything** to the live sim degrades the
-flight — the integrated GUI, a `gz sim -g` client, or even `--record` state
-logging all turn the clean 18 s run into 55–90 s of wandering (same-day
-control: pure headless 18.0 s / 11.9 m). So never record the flight live;
-replay it afterwards, where render load can't affect the already-flown path:
+### Run / experiment flow
 
-```bash
-# 1. fly ONE clean run, headless (the per-tick CSV is the recording)
-NO_ATTACH=1 HEADLESS=1 N_RUNS=1 ./run_lab.sh
-./analyze.py                 # wait for "reached", sanity-check the run
-./run_lab.sh kill
+- **`run_lab.sh`** — **launcher.** Brings up a 4-pane tmux stack (PX4+Gazebo /
+  XRCE agent / LiDAR bridge / flight node). Subcommands: `reset` (restart just
+  the node — drone flies home and starts a fresh run, picking up code edits),
+  `kill`, `gui` (attach a Gazebo window to watch). Env vars: `HEADLESS=1`,
+  `NO_ATTACH=1`, `N_RUNS`, `RUN_TIMEOUT`.
+- **`exp.sh`** — **experiment driver** (for batches). Sits on top of
+  `run_lab.sh`: `up` brings up a fresh stack, `collect <name>` waits for the
+  batch to finish and archives everything into `logs/exp/<name>/`. The whole
+  baseline→iter5 verification was run through this.
 
-# 2. replay the trajectory in a Gazebo GUI
-./replay_demo.py --loop      # newest CSV; add --speed 0.5 for slow-mo
-# in the GUI: right-click the drone -> Follow, then screen-record (Win+G)
-```
+### Analysis tools (judge a run without opening the GUI)
 
-`RECORD=1 ./run_lab.sh` + `./run_lab.sh play` (native gz state-log playback)
-also exist, but the recording overhead itself spoils the flight being
-recorded — prefer `replay_demo.py`.
+- **`analyze.py`** — **results table.** Prints `summary.jsonl` as one row per
+  run (reached / collisions / time / min distance), or tick stats for a
+  session CSV. Zero dependencies.
+- **`report.py`** — **ASCII trajectory map.** Renders a session CSV as a text
+  map of the arena: `S` start, `.` path, `X` collision, `!` infeasible,
+  `G` goal, plus collision / stall diagnostics. The main tool for telling a
+  good flight from a bad one without watching Gazebo.
+- **`sim_offline.py`** — **offline sim (seconds, not minutes).** No ROS / no
+  Gazebo — a ray-cast LiDAR + first-order velocity model running `dwa_core` in
+  the same arena. `--sweep` compares several parameter sets at once, `--noise`
+  stress-tests robustness. Pre-screen a scoring change here before spending
+  minutes verifying it in Gazebo. Not a substitute for Gazebo.
+- **`verify_frame.py`** — **LiDAR handedness check.** Grabs one real scan,
+  converts it both ways, and scores each against the known arena geometry.
+  This is what proved the mirror bug (fix #1): 0.08 m vs 0.32 m.
+
+### Data & docs
+
+- **`EXPERIMENTS.md`** — the full iteration log (motivation → change → result →
+  decision). Read this to understand *why* each change was made.
+- **`README.md`** — this file.
+- **`logs/exp/<name>/`** — the twelve committed experiment archives
+  (`baseline`, `iter1`–`iter5c`, `verifyA/B`, `final5`), each with its session
+  CSV, summary, report, and config snapshot — the evidence behind the results
+  table. Loose `logs/*.csv` / `summary.jsonl` are scratch and git-ignored.
 
 ## Unattended batches
 

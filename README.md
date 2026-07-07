@@ -33,7 +33,7 @@ _Demo video: coming soon._
 - PX4-Autopilot v1.14.4 + Gazebo (Garden or Harmonic — must match the bridge)
 - `ros_gz` bridge **built for your Gazebo version** — check `gz sim --version`
   first. The default `ros-humble-ros-gz-bridge` targets Fortress and will
-  silently drop every message; this was a real bug, see [bug.md](docs/bug.md).
+  silently drop every message; this was a real bug, see [bug.md](archive/bug.md).
 - Micro-XRCE-DDS-Agent, `px4_msgs`, `tmux`
 - Python 3.10 with `numpy` (live node); `pybullet` for the offline prototype
 
@@ -88,7 +88,7 @@ planner factored into a ROS-free module ([`dwa_core.py`](dwa_core.py)).
 |------|-------|------|
 | `Config` | `dwa_core.py` | DWA parameters and drone limits. |
 | `DroneLidarScanner` | `scanner.py` | Live node: Offboard control + DWA navigation state machine. |
-| `X550Drone`, `Barrier`, `Environment`, `Goal` | `dwa_logic.py` | Offline PyBullet prototype. |
+| `X550Drone`, `Barrier`, `Environment`, `Goal` | `archive/dwa_logic.py` | Offline PyBullet prototype. |
 
 ### Functions
 
@@ -133,4 +133,5 @@ feeding waypoints on top (see the roadmap in [architecture.md](docs/architecture
 - [eProsima Micro-XRCE-DDS-Agent](https://github.com/eProsima/Micro-XRCE-DDS-Agent)
 - Related notes in this repo: [installation.md](docs/installation.md),
   [architecture.md](docs/architecture.md), [documentation.md](docs/documentation.md),
-  [discussion.md](docs/discussion.md), [bug.md](docs/bug.md), [note.md](docs/note.md).
+  [discussion.md](docs/discussion.md), [bug.md](archive/bug.md), and the
+  obstacle-adding guide [gz_extra/usage.md](gz_extra/usage.md).
