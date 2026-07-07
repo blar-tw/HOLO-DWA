@@ -15,8 +15,7 @@ _Demo video: coming soon._
 - [Usage](#usage)
 - [Documentation](#documentation)
   - [What each file does](#what-each-file-does)
-  - [Configuration](#configuration)
-  - [Baseline vs. tuned planner (holo_lab)](#baseline-vs-tuned-planner-holo_lab)
+  - [Reference docs](#reference-docs)
 - [Comparison](#comparison)
 - [References](#references)
 
@@ -68,72 +67,50 @@ Before the first run, PX4 needs Offboard-without-RC enabled once
 | Path | Role |
 |------|------|
 | [`scanner.py`](scanner.py) | Live ROS 2 node: PX4 Offboard control + LiDAR-driven DWA navigation. |
-| [`dwa_core.py`](dwa_core.py) | Holonomic DWA algorithm — the `(vx, vy)` window search + scoring (no ROS deps). |
+| [`dwa_core.py`](dwa_core.py) | Holonomic DWA algorithm — the tuned `(vx, vy)` window search + scoring (no ROS deps). |
 | [`run.sh`](run.sh) | One-shot tmux launcher for the full stack. |
 | [`gz_extra/`](gz_extra/) | `x500_lidar_2d` model, airframe, and `dwa_test` world missing from PX4 v1.14.4 (`install.sh` copies them in); obstacle guide in [usage.md](gz_extra/usage.md). |
-| [`holo_lab/`](holo_lab/) | Experiment harness + tuned planner (1/5 → 15/15 runs, zero collisions). **Start here for results** — [README](holo_lab/README.md). |
-| [`docs/`](docs/) | architecture, documentation, installation, discussion. |
+| [`holo_lab/`](holo_lab/) | Experiment harness + the full before→after tuning study (baseline → 15/15 runs, zero collisions). **Start here for the results** — [README](holo_lab/README.md). |
+| [`docs/`](docs/) | Design & reference docs (linked under [Reference docs](#reference-docs)). |
 | [`archive/`](archive/) | `dwa_logic.py` (offline PyBullet prototype), `bug.md` (`ros_gz` debug log). |
 
-> The root `scanner.py` / `dwa_core.py` are the **baseline** planner. The tuned
-> version and the full before→after study (every failure mode, root cause, and
-> fix) live in [`holo_lab/`](holo_lab/) and
-> [holo_lab/EXPERIMENTS.md](holo_lab/EXPERIMENTS.md).
+### Reference docs
 
-### Configuration
+- **[architecture.md](docs/architecture.md)** — data flow, ENU↔NED coordinate
+  frames, the navigation state machine, the DWA loop, key parameters, and the
+  simulation world.
+- **[documentation.md](docs/documentation.md)** — class / function / `Config`
+  parameter reference.
+- **[installation.md](docs/installation.md)** — full step-by-step setup.
+- **[discussion.md](docs/discussion.md)** — algorithm design trade-offs (local
+  minima, the velocity-reward modes, the doorway problem).
 
-All planner knobs are fields on `dwa_core.Config`, overridden for the live
-drone in the `dwa_config` block near the top of `scanner.py`. Edit there and
-relaunch (`./run.sh`) — no rebuild needed.
-
-| Parameter | Default (live) | What it does |
-|-----------|---------------:|--------------|
-| `v_max`, `vx/vy_min/max` | 1.5, ±1.5 | speed and per-axis velocity limits (m/s) |
-| `a_max`, `brake_a_max` | 1.0, 1.0 | dynamic-window accel bound / braking limit (m/s²) |
-| `predict_time`, `predict_dt` | 3.0, 0.2 | how far / how finely each candidate is rolled out (s) |
-| `vx/vy_resolution` | 0.1 | velocity-grid step — finer = smoother paths, more compute |
-| `robot_radius` | 0.2 | obstacle inflation radius (m); raise for more clearance |
-| `goal_threshold` | 0.5 | arrival radius (m) |
-| `heading / clearance / velocity_weight` | 0.2 / 0.2 / 0.6 | relative weight of aiming at the goal / staying clear / going fast |
-| `velocity_mode` | `scalar` | `scalar` \| `component` \| `blend` velocity reward |
-
-ROS 2 node parameters: `goal_x`, `goal_y` (Gazebo world coords, default
-`12.0, 0.0`) — pass as `./run.sh <goal_x> <goal_y>`.
-
-How each weight and mode changes behaviour (wall deadlock, the doorway
-problem, open-space drift), and the tuned values that fixed them, are in
-[docs/discussion.md](docs/discussion.md) and
-[holo_lab/EXPERIMENTS.md](holo_lab/EXPERIMENTS.md).
-
-### Baseline vs. tuned planner (`holo_lab`)
-
-Both run the **same DWA algorithm**: diffing the two `dwa_core.py` copies leaves
-the `(vx, vy)` velocity-window search, the admissibility mask (clearance +
-braking-speed cap), and the trajectory rollout identical — ~1.7 ms/tick either
-way, so the [benchmark](#comparison) is a fair same-compute comparison. What the
-`holo_lab` tuning changes is the **scoring**, one **sensing fix**, and a few
-**limits**:
-
-| Aspect | Baseline (root `scanner.py` + `dwa_core.py`) | Tuned (`holo_lab/`) |
-|--------|----------------------------------------------|---------------------|
-| DWA window / feasibility / rollout | *(unchanged)* | *(unchanged)* |
-| Clearance score | min distance along the *predicted path* — speed-dependent, so it rewards creeping | fixed 1.5 m probe along the candidate's *direction*, speed-independent (`clearance_lookahead=1.5`, `clearance_norm=0.5`) |
-| Terminal approach | binary bonus at the goal circle + raw speed (`10000+speed`) → fast fly-bys orbit the goal | continuous 2 m attraction basin + braking-curve target speed (`goal_capture=2.0`, `goal_approach_a=0.5`) |
-| LiDAR frame | mirror bug — no `flip_y` | `flip_y=True` (Gazebo `gpu_lidar` z-up/+left vs PX4 NED/+right) |
-| `robot_radius` | 0.2 m (below the 0.3 m collision proxy → guaranteed hit) | 0.30 m |
-| Weights H/C/V, `velocity_mode` | 0.2 / 0.2 / 0.6, `scalar` | 0.3 / 0.3 / 0.4, `blend` |
-| Result on `dwa_test` | **1/5 reached, 44+ collisions** | **15/15 reached, 0 collisions**, min LiDAR 0.66 m, ~18 s/run |
-
-The scoring and mirror fix live **only** in the `holo_lab` copy; the root files
-intentionally keep the baseline behaviour (mirror bug included) as the benchmark
-baseline. Full per-iteration derivation:
-[holo_lab/EXPERIMENTS.md](holo_lab/EXPERIMENTS.md).
+Planner parameters live on `dwa_core.Config`, set for the live drone in the
+`dwa_config` block near the top of [`scanner.py`](scanner.py) — edit there and
+relaunch (`./run.sh`), no rebuild. The tuning story (how each value was chosen)
+is in [holo_lab/EXPERIMENTS.md](holo_lab/EXPERIMENTS.md).
 
 ## Comparison
 
-> **Thesis work in progress.** This is the central study of the thesis: a
-> controlled benchmark of the tuned holonomic DWA here against a baseline of
-> comparable compute cost. The framework is fixed; the results table is pending.
+> **Thesis work in progress.** The central study is a controlled comparison of a
+> **standard DWA** against the **tuned holonomic HOLO-DWA** here, at equal
+> per-tick compute (~1.7 ms) so the difference is the planner, not the budget.
+> Formal results table pending.
+
+Both keep the DWA machinery (dynamic velocity window, admissibility mask,
+short-horizon rollout); HOLO-DWA is **holonomic** — it searches `(vx, vy)` and
+decouples yaw, versus the classic `(v, ω)` of a car-like robot. The **tuning**
+then reworks how candidate velocities are scored:
+
+| | Standard DWA | Tuned HOLO-DWA |
+|---|---|---|
+| Clearance term | distance along the predicted path — speed-coupled, quietly rewards creeping toward obstacles | fixed-distance probe along the candidate's direction — speed-independent |
+| Terminal approach | stop inside the goal radius, reward raw speed | continuous braking-curve capture basin — arrive at a stoppable speed, no fly-by orbits |
+| LiDAR frame | — | corrects the Gazebo (z-up) ↔ PX4 (NED/FRD) scan handedness |
+| Result on `dwa_test` | **1/5 reached, 44+ collisions** | **15/15 reached, 0 collisions**, min clearance 0.66 m, ~18 s/run |
+
+How each change was found and validated lives in [holo_lab/](holo_lab/) — see
+its [README](holo_lab/README.md) and [EXPERIMENTS.md](holo_lab/EXPERIMENTS.md).
 
 ## References
 

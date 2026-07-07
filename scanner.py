@@ -99,8 +99,20 @@ class DroneLidarScanner(Node):
         self.dwa_config.control_dt = 0.2
         self.dwa_config.predict_time = 3.0
         self.dwa_config.predict_dt = 0.2
-        self.dwa_config.robot_radius = 0.2
+        # Planner keep-out must be >= the 0.3 m collision proxy (the x500 body is
+        # ~0.25 m); 0.2 let the planner fly through what counts as a hit.
+        self.dwa_config.robot_radius = 0.30
         self.dwa_config.goal_threshold = 0.5
+        # Tuned scoring (see holo_lab/EXPERIMENTS.md): blend velocity reward,
+        # direction-based clearance (speed-independent 1.5 m probe), a continuous
+        # terminal basin, and heading/clearance rebalanced against velocity.
+        self.dwa_config.velocity_mode = "blend"
+        self.dwa_config.blend_alpha = 0.5
+        self.dwa_config.clearance_norm = 0.5
+        self.dwa_config.clearance_lookahead = 1.5
+        self.dwa_config.heading_weight = 0.3
+        self.dwa_config.clearance_weight = 0.3
+        self.dwa_config.velocity_weight = 0.4
 
     @staticmethod
     def _yaw_from_quaternion(q):
@@ -253,6 +265,10 @@ class DroneLidarScanner(Node):
             self.latest_scan.range_max,
             self.pos_x, self.pos_y, self.yaw,
             stride=self.lidar_stride,
+            # gz gpu_lidar scan is z-up (+angle = body LEFT); our frame is
+            # NED/FRD (+y = right). Without the flip the point cloud is mirrored
+            # across the body axis - see scan_to_world_points.
+            flip_y=True,
         )
 
         state = {"x": self.pos_x, "y": self.pos_y, "vx": self.vel_x, "vy": self.vel_y}

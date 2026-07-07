@@ -84,8 +84,9 @@ XY velocity setpoints use PX4's per-axis NaN passthrough: position is
 Each NAVIGATE tick, `run_dwa_navigation()`:
 
 1. Converts the latest LiDAR scan into a local-frame obstacle point cloud
-   (`dwa_core.scan_to_world_points`, subsampled by `lidar_stride = 6`, so
-   ~180 of the 1080 rays).
+   (`dwa_core.scan_to_world_points`, with `flip_y=True` to correct the gz z-up
+   vs PX4 NED/FRD scan handedness, subsampled by `lidar_stride = 6`, so ~180 of
+   the 1080 rays).
 2. Builds the **dynamic window**: a grid of `(vx, vy)` candidates centered on
    the current velocity, bounded by acceleration limits (`a_max * control_dt`)
    and the absolute velocity limits.
@@ -98,7 +99,7 @@ Each NAVIGATE tick, `run_dwa_navigation()`:
 
    ```
    score = heading_weight   * heading      (cosine of velocity vs. goal direction, [-1, 1])
-         + clearance_weight  * clearance    (min obstacle clearance, clipped to [0, 1])
+         + clearance_weight  * clearance    (obstacle distance probed along the candidate direction, clipped)
          + velocity_weight   * velocity     (speed reward, [0, 1])
    ```
 
@@ -108,6 +109,13 @@ If no candidate is feasible, the node brakes/holds. The `heading` term is
 distance-independent (an angle cosine, not a progress ratio) — this is a
 deliberate fix for a runaway failure mode documented in
 [discussion.md](discussion.md) section 3.
+
+Two tuned refinements from the [holo_lab](../holo_lab/) study also apply: the
+`clearance` term probes a fixed distance along each candidate's direction
+(speed-independent), and any candidate whose rollout passes within `goal_capture`
+of the goal is scored instead by a continuous **terminal basin** (goal proximity
++ a braking-curve target speed), landing the drone at a stoppable speed. See
+[holo_lab/EXPERIMENTS.md](../holo_lab/EXPERIMENTS.md).
 
 ### Velocity-reward modes
 
@@ -123,8 +131,8 @@ section 1:
 
 ## 5. Key parameters
 
-`scanner.py` overrides the `dwa_core.Config` defaults for the live drone
-(slower and more conservative than the offline prototype):
+`scanner.py` overrides the `dwa_core.Config` defaults for the live drone with
+the tuned values (chosen by the [holo_lab](../holo_lab/) study):
 
 | Parameter | Live (`scanner.py`) | Meaning |
 |-----------|---------------------|---------|
@@ -133,10 +141,12 @@ section 1:
 | `control_dt` | 0.2 | window horizon for the accel bound (s) |
 | `predict_time`, `predict_dt` | 3.0, 0.2 | trajectory rollout horizon / step (s) |
 | `vx/vy_resolution` | 0.1 | velocity-grid resolution (m/s) |
-| `robot_radius` | 0.2 | inflation radius (m) |
+| `robot_radius` | 0.30 | inflation radius (m); >= the 0.3 m collision proxy |
 | `goal_threshold` | 0.5 | arrival radius (m) |
-| `heading/clearance/velocity_weight` | 0.2 / 0.2 / 0.6 | score weights (defaults, not overridden) |
-| `velocity_mode` | `scalar` | velocity-reward mode (default) |
+| `heading/clearance/velocity_weight` | 0.3 / 0.3 / 0.4 | score weights |
+| `velocity_mode`, `blend_alpha` | `blend`, 0.5 | velocity-reward mode / scalar floor |
+| `clearance_lookahead`, `clearance_norm` | 1.5, 0.5 | clearance direction-probe distance / saturation (m) |
+| `goal_capture`, `goal_approach_a` | 2.0, 0.5 | terminal-basin radius (m) / approach decel (m/s^2) |
 
 Node parameters (ROS 2): `goal_x`, `goal_y` (Gazebo world coords, default
 `12.0, 0.0`).
