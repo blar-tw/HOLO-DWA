@@ -1,0 +1,14 @@
+# Lab run outputs - keep the curated logs/exp/ archives, ignore loose scratch.
+#
+# Only DIRECT children of logs/ are ignored (loose session_*.csv, the root
+# summary.jsonl index, bookkeeping dotfiles). Per-experiment archives under
+# logs/exp/<name>/ are committed on purpose - they are the permanent record.
+logs/*.csv
+logs/*.jsonl
+# scratch bookkeeping written by run_lab.sh / exp.sh
+logs/.scan_pane
+logs/.restart_scanner.sh
+logs/.exp_marker
+!logs/.gitkeep
+__pycache__/
+*.pyc

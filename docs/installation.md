@@ -56,7 +56,7 @@ gz sim --version
 - `Gazebo Sim, version 8.x.x` → Gazebo **Harmonic**
 - `Gazebo Sim, version 7.x.x` → Gazebo **Garden**
 
-## 4. 安裝對應版本的 ros_gz bridge（⚠️ 版本不對就是先前 bug.md 那個問題的根因）
+## 4. 安裝對應版本的 ros_gz bridge（⚠️ 版本不對就是先前 archive/bug.md 那個問題的根因）
 
 ROS 2 Humble 預設的 `ros-humble-ros-gz-bridge` 是對應 **Gazebo Fortress**（`ignition-*` 系列套件）編譯的，Garden／Harmonic 都不能用這個預設套件，裝下去雖然會成功、topic 也看得到，但訊息完全收不到（`/clock` 也不會動），因為 `gz-msgs`/`gz-transport`（或 Fortress 時代的 `ignition-*`）版本互不相容、解碼失敗。要照實際裝到的版本裝對應的 meta-package，而且它們會互相衝突、只能裝一個：
 
@@ -203,7 +203,3 @@ source /opt/ros/humble/setup.bash
 source ~/ws/install/setup.bash
 python3 ~/ws/src/HOLO-DWA/scanner.py
 ```
-
-## 已知問題
-
-見 [bug.md](bug.md) — 記錄了「bridge 建立成功但完全收不到訊息」的完整除錯過程與根因（就是第 4 節那個版本問題）。

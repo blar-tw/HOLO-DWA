@@ -46,22 +46,63 @@ class Config:
         self.velocity_mode = "scalar"
         self.blend_alpha = 0.5
 
+        # clearance_score saturates at this many meters of safe_dist (margin
+        # beyond robot_radius). Lower = "safe enough is enough": trajectories
+        # keeping >= this margin all score 1.0, and the 0..norm band gets a
+        # steeper gradient, so the term concentrates on truly close passes
+        # instead of rewarding loitering far from any obstacle (doorway
+        # problem, docs/discussion.md section 2).
+        self.clearance_norm = 1.0
+        # > 0 switches the clearance TERM to a direction-based measure: the
+        # minimum obstacle distance along the candidate's unit direction over
+        # this fixed distance (m), independent of candidate speed. With the
+        # legacy time-based measure (min over the predicted ray, value 0),
+        # slower candidates have shorter rays and therefore higher clearance,
+        # so the term rewards creeping; the drone inches straight into
+        # obstacles that a 1-2 m lookahead would flag ("creep trap"). The
+        # feasibility mask and braking cap still use the true time-based
+        # trajectory - this only changes how the *score* judges direction
+        # safety, cleanly separating direction quality (heading+clearance)
+        # from speed choice (velocity term under the braking cap).
+        self.clearance_lookahead = 0.0
+
         self.robot_radius = 0.2
         self.goal_threshold = 0.3
+        # Radius (m) of the terminal-attraction basin around the goal: any
+        # candidate whose predicted ray passes within this of the goal is
+        # scored by goal proximity + braking-curve speed match instead of
+        # the regular three-term sum. Must be comfortably larger than
+        # goal_threshold: with only the old binary passes-within-threshold
+        # bonus, a fast flyby whose ray misses the small circle gets no
+        # terminal signal at all, and the +/-a*dt window cannot bend the
+        # path in - the drone settles into a stable orbit around the goal
+        # (verifyA run 1: 90 s circling at 1.5-2.4 m, bonus fired 0 ticks).
+        self.goal_capture = 2.0
 
 
 def scan_to_world_points(ranges, angle_min, angle_increment, range_min, range_max,
-                          robot_x, robot_y, yaw, stride=1):
+                          robot_x, robot_y, yaw, stride=1, flip_y=False):
     """Convert a body-frame 2D LiDAR scan into local/world-frame obstacle points.
 
     angle 0 in the scan is straight ahead along the sensor's local +x axis;
     `yaw` rotates that into the same frame as (robot_x, robot_y). `stride`
     subsamples the rays to keep the point cloud small for the DWA search.
+
+    flip_y handles the scan-frame handedness. The rotation below assumes a
+    positive scan angle sweeps toward the body +y of the (robot_x, robot_y)
+    frame. PX4's local frame is NED with an FRD body (+y = right), but a
+    Gazebo gpu_lidar publishes angles in the z-up sensor frame (+y = LEFT),
+    so consuming such a scan with NED odometry requires flip_y=True or every
+    obstacle is MIRRORED across the body axis (left/right swapped). This
+    exact mismatch made the drone dodge phantom obstacles into the real
+    staggered cylinders, the only mirror-asymmetric part of the arena.
     """
     ranges = np.asarray(ranges, dtype=float)
     idx = np.arange(0, len(ranges), stride)
     r = ranges[idx]
     angles = angle_min + idx * angle_increment
+    if flip_y:
+        angles = -angles
 
     valid = np.isfinite(r) & (r > range_min) & (r < range_max)
     if not np.any(valid):
@@ -119,6 +160,8 @@ def dwa_control(state, goal_xy, obstacle_points, config, return_debug=False):
     traj_x = x0 + VX[:, None] * steps[None, :]
     traj_y = y0 + VY[:, None] * steps[None, :]
 
+    # Guards divisions by |v|; sub-1e-6-speed candidates are infeasible anyway.
+    speed_denom = np.where(speed > 1e-6, speed, 1.0)
     if obstacle_points.shape[0] > 0:
         ox = obstacle_points[:, 0]
         oy = obstacle_points[:, 1]
@@ -126,8 +169,24 @@ def dwa_control(state, goal_xy, obstacle_points, config, return_debug=False):
         dy = traj_y[:, :, None] - oy[None, None, :]
         dist_to_nearest = np.sqrt(dx * dx + dy * dy).min(axis=2)
         traj_clearance = dist_to_nearest.min(axis=1)
+        if config.clearance_lookahead > 0.0:
+            # Speed-independent direction probe: sample fixed arc-length
+            # points along each candidate's unit direction (see Config).
+            n_probe = 6
+            s_steps = np.linspace(config.clearance_lookahead / n_probe,
+                                  config.clearance_lookahead, n_probe)
+            dir_x = VX / speed_denom
+            dir_y = VY / speed_denom
+            probe_x = x0 + dir_x[:, None] * s_steps[None, :]
+            probe_y = y0 + dir_y[:, None] * s_steps[None, :]
+            pdx = probe_x[:, :, None] - ox[None, None, :]
+            pdy = probe_y[:, :, None] - oy[None, None, :]
+            dir_clearance = np.sqrt(pdx * pdx + pdy * pdy).min(axis=2).min(axis=1)
+        else:
+            dir_clearance = traj_clearance
     else:
         traj_clearance = np.full(VX.shape, np.inf)
+        dir_clearance = traj_clearance
 
     safe_dist = traj_clearance - config.robot_radius
     feasible &= safe_dist > 0
@@ -136,14 +195,10 @@ def dwa_control(state, goal_xy, obstacle_points, config, return_debug=False):
     feasible &= speed <= safe_speed
 
     min_goal_dist = np.hypot(goal_x - traj_x, goal_y - traj_y).min(axis=1)
-    goal_reached = min_goal_dist < config.goal_threshold
 
     goal_dx, goal_dy = goal_x - x0, goal_y - y0
     start_dist = math.hypot(goal_dx, goal_dy)
     scalar_speed = np.clip(speed, 0.0, config.v_max)
-    # Guard the division for the cosine below; sub-1e-6-speed candidates are
-    # already marked infeasible above, so their heading value is irrelevant.
-    speed_denom = np.where(speed > 1e-6, speed, 1.0)
     if start_dist > 1e-6:
         ux, uy = goal_dx / start_dist, goal_dy / start_dist
         # Goal-directed speed component, used by "component"/"blend" velocity modes.
@@ -159,7 +214,8 @@ def dwa_control(state, goal_xy, obstacle_points, config, return_debug=False):
         component_speed = np.zeros_like(scalar_speed)
         heading_score = np.zeros_like(scalar_speed)
 
-    clearance_score = np.clip(safe_dist, 0.0, 1.0)
+    clearance_score = np.clip((dir_clearance - config.robot_radius) / config.clearance_norm,
+                              0.0, 1.0)
     # Tradeoffs of each mode are documented on Config.velocity_mode and in
     # docs/discussion.md section 1.
     if config.velocity_mode == "scalar":
@@ -177,7 +233,25 @@ def dwa_control(state, goal_xy, obstacle_points, config, return_debug=False):
         + config.clearance_weight * clearance_score
         + config.velocity_weight * velocity_score
     )
-    score = np.where(goal_reached, 10000.0 + speed, score)
+    # Terminal attraction basin (see Config.goal_capture). Candidates whose
+    # ray passes within goal_capture of the goal are scored by proximity
+    # first (x10 so meters of miss always beat m/s of speed mismatch) and
+    # braking-curve speed match second. History of this term:
+    #   `10000 + speed` (fastest through the small circle)  -> full-speed
+    #     arrival, tracking error turns near-misses into overshoot orbits;
+    #   `10000 - speed` (slowest)                            -> crawls the
+    #     whole final ~4.5 m;
+    #   `10000 - |speed - sqrt(2 a d)|` binary on threshold  -> good when a
+    #     ray crosses the 0.5 m circle, but a flyby whose rays miss it gets
+    #     NO terminal pull at all and orbits the goal forever (verifyA).
+    # The continuous basin + braking curve fixes both: any near pass is
+    # steered toward the center, arriving at a killable speed.
+    stop_dist = max(start_dist - config.goal_threshold, 0.0)
+    goal_speed_target = min(config.v_max, math.sqrt(2.0 * config.brake_a_max * stop_dist))
+    near_goal = min_goal_dist < config.goal_capture
+    score = np.where(near_goal,
+                     10000.0 - 10.0 * min_goal_dist - np.abs(speed - goal_speed_target),
+                     score)
     score = np.where(feasible, score, -np.inf)
 
     if not np.any(feasible):

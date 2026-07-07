@@ -9,7 +9,7 @@ at runtime, see [architecture.md](architecture.md).
 |------|------|
 | [`dwa_core.py`](../dwa_core.py) | Holonomic DWA algorithm. No ROS / PyBullet deps — imported by both the live node and (in spirit) the prototype. |
 | [`scanner.py`](../scanner.py) | Live ROS 2 node: PX4 Offboard control + LiDAR-driven DWA navigation. |
-| [`dwa_logic.py`](../dwa_logic.py) | Offline PyBullet prototype / visualizer. Same DWA idea against analytic obstacle shapes. |
+| [`dwa_logic.py`](../archive/dwa_logic.py) | Offline PyBullet prototype / visualizer. Same DWA idea against analytic obstacle shapes. |
 | [`run.sh`](../run.sh) | One-shot tmux launcher for the full simulation stack. |
 | [`gz_extra/`](../gz_extra/) | Gazebo models, airframe, and the `dwa_test` world missing from PX4 v1.14.4; `install.sh` copies them into PX4-Autopilot. |
 
