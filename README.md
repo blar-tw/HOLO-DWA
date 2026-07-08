@@ -14,9 +14,9 @@ _Demo video: coming soon._
 - [Installation](#installation)
 - [Usage](#usage)
 - [Documentation](#documentation)
-  - [What each file does](#what-each-file-does)
+  - [Files](#files)
   - [Reference docs](#reference-docs)
-- [Comparison](#comparison)
+- [Differences from standard DWA](#differences-from-standard-dwa)
 - [References](#references)
 
 ## Requirements
@@ -90,27 +90,39 @@ Planner parameters live on `dwa_core.Config`, set for the live drone in the
 relaunch (`./run.sh`), no rebuild. The tuning story (how each value was chosen)
 is in [holo_lab/EXPERIMENTS.md](holo_lab/EXPERIMENTS.md).
 
-## Comparison
+## Differences from standard DWA
 
-> **Thesis work in progress.** The central study is a controlled comparison of a
-> **standard DWA** against the **tuned holonomic HOLO-DWA** here, at equal
-> per-tick compute (~1.7 ms) so the difference is the planner, not the budget.
-> Formal results table pending.
+HOLO-DWA keeps the DWA skeleton — a dynamic velocity window, the admissibility
+mask, and short-horizon rollout — but differs from a textbook DWA in two ways.
 
-Both keep the DWA machinery (dynamic velocity window, admissibility mask,
-short-horizon rollout); HOLO-DWA is **holonomic** — it searches `(vx, vy)` and
-decouples yaw, versus the classic `(v, ω)` of a car-like robot. The **tuning**
-then reworks how candidate velocities are scored:
+**Search space: `(v, ω)` → `(vx, vy)`.** Classic DWA searches forward speed and
+yaw rate `(v, ω)`, heading tied to the body — a car-like, non-holonomic motion
+model. HOLO-DWA searches the planar velocity `(vx, vy)` directly and decouples
+yaw, so the multirotor can strafe sideways through a gap while keeping its nose
+(and the LiDAR's forward arc) on the goal.
 
-| | Standard DWA | Tuned HOLO-DWA |
-|---|---|---|
-| Clearance term | distance along the predicted path — speed-coupled, quietly rewards creeping toward obstacles | fixed-distance probe along the candidate's direction — speed-independent |
-| Terminal approach | stop inside the goal radius, reward raw speed | continuous braking-curve capture basin — arrive at a stoppable speed, no fly-by orbits |
-| LiDAR frame | — | corrects the Gazebo (z-up) ↔ PX4 (NED/FRD) scan handedness |
-| Result on `dwa_test` | **1/5 reached, 44+ collisions** | **15/15 reached, 0 collisions**, min clearance 0.66 m, ~18 s/run |
+**Scoring function.** On top of the standard heading / clearance / velocity
+terms, the scoring is reworked:
 
-How each change was found and validated lives in [holo_lab/](holo_lab/) — see
-its [README](holo_lab/README.md) and [EXPERIMENTS.md](holo_lab/EXPERIMENTS.md).
+- **Clearance** probes a fixed distance along the candidate's direction
+  (speed-independent), instead of the minimum distance along the predicted
+  trajectory — the standard measure is speed-coupled and quietly rewards
+  creeping toward obstacles.
+- **Terminal approach** uses a continuous attraction basin near the goal with a
+  braking-curve target speed, so the drone arrives at a stoppable speed, rather
+  than a hard bonus at the goal radius that lets a fast pass overshoot into an
+  orbit.
+- **Velocity** uses a blended reward (goal-directed component with a scalar
+  floor) to avoid the diagonal drift a raw-speed reward causes in open space,
+  while still sliding along walls to find gaps.
+
+The pipeline also corrects the Gazebo z-up ↔ PX4 NED/FRD LiDAR scan handedness,
+which a naive setup gets wrong.
+
+> A formal head-to-head benchmark against a standard DWA of comparable compute
+> is future work. How these scoring changes were derived and validated (the
+> before→after study) is in [holo_lab/README.md](holo_lab/README.md) and
+> [EXPERIMENTS.md](holo_lab/EXPERIMENTS.md).
 
 ## References
 

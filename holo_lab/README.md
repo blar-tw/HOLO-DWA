@@ -1,26 +1,17 @@
 # holo_lab — tuning a holonomic DWA planner
 
-The **experiment harness and optimized planner** for the
-[HOLO-DWA](https://github.com/blar-tw/HOLO-DWA) project. Self-contained: its own
-copy of the planner (`dwa_core.py`) and flight node (`scanner_lab.py`), plus
-tooling to fly the PX4 multirotor in Gazebo, log every control tick, and iterate
-on the scoring function **without touching the repo-root originals**.
+The **sandbox for iterating on and testing the HOLO-DWA planner** (part of the
+[HOLO-DWA](https://github.com/blar-tw/HOLO-DWA) project). It carries its own copy
+of the planner (`dwa_core.py`) and flight node (`scanner_lab.py`) plus tooling to
+fly the PX4 multirotor in Gazebo, log every control tick, batch runs, and iterate
+on the scoring function in isolation. The task: cross a cluttered arena to the
+goal at `(12, 0)` on **2D LiDAR only** — through a wall (1.5 m gap), a
+three-cylinder slalom, and a two-pillar gate.
 
-The drone crosses a cluttered arena to a goal at `(12, 0)` on **2D LiDAR only**
-— no map, no global path — through a wall (1.5 m gap), a three-cylinder slalom,
-and a two-pillar gate:
-
-```
-   y (North)
-   +9 ┌────────────────────────────────────────────────┐
-      │        ###        ######                        │   # = obstacle
-      │        ###        ######                        │   S = start (0,0)
-    0 │ S..........  ..........  ..............  E G     │   . = flown path
-      │        ###o ###          ######                 │   G = goal (12,0)
-   -9 └────────────────────────────────────────────────┘
-      x=-4      x=3    x=5-6      x=9        x=12   (East)
-```
-*(schematic — real trajectory maps come from [`report.py`](report.py))*
+Runs go **headless** by default (no Gazebo GUI), which keeps the compute light
+and PX4's speed tracking clean — on WSL2 a rendered GUI measurably degrades
+tracking and wanders the path. Use `./run_lab.sh gui` only when you want to
+watch.
 
 ## Result — baseline vs. tuned
 
@@ -56,17 +47,23 @@ a few limits differ:
 | `robot_radius` | 0.2 m (< 0.3 m collision proxy → guaranteed hit) | 0.30 m |
 | Weights H/C/V, mode | 0.2/0.2/0.6, `scalar` | 0.3/0.3/0.4, `blend` |
 
-The four fixes, in the order they were found: **(1) LiDAR de-mirroring** — the
-real root cause; a raw scan mirrors every obstacle, so the drone dodged phantoms
-straight into the real cylinders. **(2) direction-based clearance** — stops it
-inching into obstacles. **(3) continuous terminal basin** — a binary "within
-0.5 m" bonus gave zero pull on a fast fly-by, so it orbited the goal forever.
-**(4) blended velocity** — goal component in the open kills diagonal drift; a
-scalar floor keeps wall-sliding so it doesn't deadlock. Full before→after story:
-**[EXPERIMENTS.md](EXPERIMENTS.md)**.
+### Iteration timeline
 
-> **Note:** the repo-root `scanner.py` / `dwa_core.py` still carry the LiDAR
-> mirror bug (fix 1), left untouched by scope — port `flip_y` over there too.
+Each round: fly → read the logs → find the mechanism → fix → re-verify. Full
+write-up in **[EXPERIMENTS.md](EXPERIMENTS.md)**.
+
+| Round | Problem found (mechanism) | Fix |
+|-------|---------------------------|-----|
+| baseline | Square-window corner degeneracy — the `\|v\|` bonus ≈ the heading penalty while accelerating, so noise flips the argmax into random diagonal drift toward the wall | velocity reward → `blend` (goal component + scalar floor) |
+| iter1 | Creep trap — clearance = min over the whole predicted ray, so slow = short ray = high score, rewarding a crawl into a cylinder | direction-based clearance: a fixed 1.5 m probe along the candidate direction |
+| iter2 | Tick replay showed the point cloud didn't match the world — a **LiDAR mirror bug** (gz `+angle` = left, the transform assumed right); only the cylinders are asymmetric, so every first hit landed there | `flip_y=True`, proven by `verify_frame.py` (0.08 m vs 0.32 m) |
+| iter3 | Avoidance perfect but orbiting the goal — a `10000 + speed` bonus rewards blasting through the circle and overshooting | braking-curve bonus `10000 − \|v − √(2·a·d)\|` |
+| iter4 | 15 runs, 0 collisions, but 2/15 fly-bys — a binary "ray within 0.5 m" bonus gives zero pull once the ray misses → stable orbit | continuous attraction basin: within 2 m, `10000 − 10·miss − \|v − brake target\|` |
+| iter5 | — | final verification: 3 batches × 5 runs, all passed |
+
+> **Note:** these fixes have now been **ported to the repo-root** `scanner.py` /
+> `dwa_core.py`, so the root planner is the tuned one too; this folder keeps the
+> baseline snapshot and the full study.
 
 ## Quick start
 
