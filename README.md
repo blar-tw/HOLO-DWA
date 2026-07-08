@@ -4,8 +4,8 @@
 > obstacle avoidance for a simulated multirotor, using Gazebo to sim.
 
 ## Demo
-[Demo](docs/demo.gif)
-### other demo runs at [demo folder](holo_lab/demo/)
+![Demo](docs/demo.gif)
+### More demo runs are available in the [demo folder](holo_lab/demo/)
 
 ## Table of Contents
 
