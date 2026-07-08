@@ -34,12 +34,16 @@ Plain container of DWA parameters and drone limits. See the parameter table in
 | `control_dt` | 0.2 | horizon used for the acceleration bound (s) |
 | `predict_time`, `predict_dt` | 2.0, 0.1 | trajectory rollout horizon / step (s) |
 | `heading_weight` | 0.2 | weight on the heading (goal-cosine) score |
-| `clearance_weight` | 0.5 | weight on the obstacle-clearance score |
-| `velocity_weight` | 0.3 | weight on the speed score |
+| `clearance_weight` | 0.2 | weight on the obstacle-clearance score |
+| `velocity_weight` | 0.6 | weight on the speed score |
 | `velocity_mode` | `"scalar"` | `scalar` / `component` / `blend` (see below) |
 | `blend_alpha` | 0.5 | scalar floor used by `blend` mode |
+| `clearance_lookahead` | 0.0 | >0 switches clearance to a direction probe of this length (m); 0 = legacy path-based |
+| `clearance_norm` | 1.0 | clearance saturation: safe margin (m) that scores 1.0 |
 | `robot_radius` | 0.2 | inflation radius (m) |
 | `goal_threshold` | 0.3 | arrival radius (m) |
+| `goal_capture` | 2.0 | terminal-basin radius (m): candidates passing this close to the goal use the basin score |
+| `goal_approach_a` | 0.5 | deceleration (m/s^2) for the terminal approach speed curve |
 
 `velocity_mode` trade-offs: `scalar` rewards raw speed (drifts diagonally in
 open space, but escapes walls by sliding); `component` rewards only
@@ -72,11 +76,13 @@ Only used by the offline PyBullet visualizer:
 
 ## Functions
 
-### `dwa_core.scan_to_world_points(ranges, angle_min, angle_increment, range_min, range_max, robot_x, robot_y, yaw, stride=1) -> (N, 2) array`
+### `dwa_core.scan_to_world_points(ranges, angle_min, angle_increment, range_min, range_max, robot_x, robot_y, yaw, stride=1, flip_y=False) -> (N, 2) array`
 
 Convert a body-frame 2D LiDAR scan into local/world-frame obstacle points.
 Angle 0 is straight ahead (sensor +x); `yaw` rotates the body frame into the
-robot's frame; `stride` subsamples rays to keep the cloud small. Invalid /
+robot's frame; `stride` subsamples rays to keep the cloud small. `flip_y=True`
+negates the scan angle to fix the gz `gpu_lidar` z-up (+angle = left) vs PX4
+NED/FRD (+angle = right) handedness — the live node passes it. Invalid /
 out-of-range returns are dropped; returns `(0, 2)` if nothing is seen.
 
 ### `dwa_core.dwa_control(state, goal_xy, obstacle_points, config, return_debug=False) -> (vx, vy, ok[, debug])`

@@ -1,152 +1,152 @@
-# DWA 演算法問題討論
+# DWA algorithm issue discussion
 
-記錄目前在 holonomic DWA 上遇到的兩個演算法層級問題:速度獎勵的設計取捨、以及門口困境。這兩個問題都屬於 DWA 這類「只看局部、一次只挑一步」的規劃器的經典局部極小值(local minimum)家族,先記錄現象、成因與候選解法,之後再逐一做實驗。
+Records two algorithm-level problems currently encountered with the holonomic DWA: the design trade-off for the velocity reward, and the doorway dilemma. Both problems belong to the classic local-minimum family for planners like DWA that "only look locally and pick one step at a time." This records the phenomena, root causes, and candidate fixes first; experiments will follow one by one.
 
 ---
 
-## 1. velocity_score:目標方向分量 vs 原始速度純量
+## 1. velocity_score: goal-direction component vs. raw speed magnitude
 
-### 背景
+### Background
 
-DWA 的評分函式是三項加權和:
+DWA's scoring function is a weighted sum of three terms:
 
 ```
-score = heading_weight * progress      (往目標推進了多少)
-      + clearance_weight * clearance   (離障礙物多遠)
-      + velocity_weight * velocity     (飛多快)
+score = heading_weight * progress      (how much progress was made toward the goal)
+      + clearance_weight * clearance   (distance from obstacles)
+      + velocity_weight * velocity     (how fast it's flying)
 ```
 
-其中 `velocity` 這一項有兩種設計:
+The `velocity` term has two possible designs:
 
-- **純量(raw magnitude)**:`|v| / v_max`,不管方向,飛得快就給分。`dwa.py` 原始版本就是這樣。
-- **分量(goal-directed component)**:把 `(vx, vy)` 投影到「目前位置 → 目標」的單位向量上,只有真正朝目標移動的速度才給分。
+- **Raw magnitude**: `|v| / v_max`, regardless of direction — flying fast scores well. This is what the original `dwa.py` did.
+- **Goal-directed component**: project `(vx, vy)` onto the unit vector from "current position → goal"; only velocity that actually moves toward the goal is rewarded.
 
-### 問題 A:純量獎勵 → 開闊空間斜飄
+### Problem A: raw-magnitude reward → diagonal drift in open space
 
-實測(模擬、完全無障礙物、目標在正前方 12m):用純量獎勵時,無人機起飛後會先斜斜地飄開,側向偏移最多到約 2.3m,快接近目標時才修正回來。
+Tested in simulation (fully open space, goal 12m straight ahead): with the raw-magnitude reward, after takeoff the drone drifts diagonally off course, with lateral offset reaching up to about 2.3m, only correcting back as it nears the goal.
 
-成因:動態視窗是以目前速度為中心的**方形**區域(vx、vy 各自 ±a·dt),方框「角落」的速度量值比正向大(對角線 √2 倍)。而目標很遠時,小角度的方向偏差對 `progress` 的影響是二階小量(勾股定理),幾乎分不出高下──於是純量速度獎勵成為主導,評分永遠偏好角落,無人機就沿對角線加速飄走。
+Cause: the dynamic window is a **square** region centered on the current velocity (vx, vy each ±a·dt); the "corners" of that box have a larger velocity magnitude than the straight-ahead direction (√2 times, diagonally). When the goal is far away, a small angular deviation barely affects `progress` (a second-order effect via the Pythagorean theorem) — the two are nearly indistinguishable. So the raw-velocity reward ends up dominating, the score always favors the corners, and the drone accelerates away along the diagonal.
 
-### 問題 B:分量獎勵 → 牆前卡死
+### Problem B: goal-component reward → freezes in front of walls
 
-把 velocity_score 改成分量獎勵後,開闊空間確實變成筆直飛向目標。但在 Gazebo 實測時發現無人機會**停在牆前面不動**。
+After switching velocity_score to the goal-directed component, open-space flight does become a straight line to the goal. But testing in Gazebo showed the drone would **stop dead in front of a wall**.
 
-成因:面對一道擋路的牆,脫困需要「側移沿牆找缺口」。但側移時:
+Cause: escaping a blocking wall requires "sidestepping along the wall to find a gap." But while sidestepping:
 
-- 朝目標的速度分量 ≈ 0 → velocity_score 拿 0 分
-- 暫時遠離目標 → progress 微幅變負
-- 貼著牆 → clearance 也低
+- The velocity component toward the goal ≈ 0 → velocity_score gets 0
+- Temporarily moving away from the goal → progress goes slightly negative
+- Hugging the wall → clearance is also low
 
-結果「側移探路」和「原地懸停」分數幾乎一樣,DWA 沒有任何動機移動,卡死。純量獎勵正好相反:「總之先動起來」有分數拿,無人機會沿牆滑動,滑到缺口正面之後,「直線穿缺口」才變成 progress 高分選項──這正是純量獎勵能脫離這種局部低谷的機制。
+The result is that "sidestepping to explore" scores about the same as "hovering in place," so DWA has no incentive to move at all — it freezes. The raw-magnitude reward does the opposite: "just moving at all" earns points, so the drone slides along the wall; once it's lined up with the gap, "flying straight through the gap" becomes the high-progress option — this is exactly the mechanism that lets the raw-magnitude reward escape this kind of local minimum.
 
-### 取捨整理
+### Trade-off summary
 
-| | 純量 `\|v\|` | 分量(投影到目標方向) |
+| | Raw magnitude `\|v\|` | Component (projected onto goal direction) |
 |---|---|---|
-| 開闊空間 | 加速段斜飄(方框角落效應) | 筆直朝目標 |
-| 牆擋路 | 沿牆滑動、有機會找到缺口 | 卡死(側移無獎勵) |
-| 本質 | 獎勵「移動」本身 | 獎勵「接近目標」 |
+| Open space | Diagonal drift during acceleration (box-corner effect) | Straight to the goal |
+| Wall blocking path | Slides along the wall, may find the gap | Freezes (no reward for sidestepping) |
+| Nature | Rewards "moving" itself | Rewards "getting closer to the goal" |
 
-### 目前的選擇
+### Current choice
 
-**改回純量**(`dwa_core.py` 現況),接受開闊空間的輕微斜飄,換取牆前不卡死。理由:斜飄只是路徑不好看、最終會收斂到目標;卡死則是任務直接失敗,嚴重程度不對等。
+**Reverted to raw magnitude** (current state of `dwa_core.py`), accepting slight diagonal drift in open space in exchange for not freezing at walls. Rationale: drift is just an ugly path that still converges to the goal eventually; freezing is an outright mission failure — the severity isn't comparable.
 
-### 之後可以實驗的方向
+### Directions for future experiments
 
-1. **混合獎勵**:`velocity_score = max(分量, α·純量)`,α 取 0.3~0.5──開闊空間由分量主導走直線,被牆擋住(分量歸零)時退回純量獎勵維持移動意願。
-2. **經典 DWA 的 heading 項**:另外加一項「速度方向與目標方向的夾角餘弦」,把「方向對不對」跟「跑多快」拆成兩個獨立評分項,而不是混在同一項裡。
-3. **上層全域規劃器**:根本解法。DWA 只當局部避障,由 A* / RRT 之類的全域規劃器給 waypoint,局部極小值問題自然消失。
-
----
-
-## 2. 門口困境(doorway / narrow-gap problem)
-
-### 現象
-
-模擬測試(牆在 x=5、缺口寬 1.5m、`robot_radius=0.4`):無人機能正確地滑向缺口前方,但到了缺口正面就**停下來小幅震盪(vx 在 ±0.1 之間跳)、不敢穿過去**。
-
-### 成因分析
-
-缺口寬 1.5m、機體半徑 0.4m,走缺口正中央時離兩側牆緣各只有 0.75m,扣掉半徑後 `safe_dist` 只剩 0.35m。這帶來三重懲罰:
-
-1. **clearance 低**:穿缺口的軌跡 clearance_score ≈ 0.35,而在缺口外徘徊可以維持接近 1.0。
-2. **煞停限速**:admissible velocity 條件 `speed ≤ √(2·safe_dist·brake_a)` 在 safe_dist=0.35、brake_a=1.0 時只允許 ≈ 0.84 m/s,velocity_score 也被壓低。
-3. **幾何餘裕小**:DWA 的候選軌跡是直線,從偏離缺口軸線的位置斜切進 1.5m 的缺口,端點很容易落在離牆緣 0.4m 以內而直接被判不可行。
-
-三者加總,「穿過去」在分數上輸給「在門口徘徊」,即使穿過去其實是安全的。這不是 bug,是評分函式忠實執行了「離障礙物近就是不好」的價值觀──問題出在這個價值觀沒有考慮「這段貼近是必要的、暫時的」。
-
-### 與第 1 題的關係
-
-兩者同源:DWA 只評估「這一步」的即時分數,沒有「先吃短期虧、換長期利益」的概念。牆前卡死是「側移暫時遠離目標」被懲罰,門口不敢進是「暫時貼近障礙物」被懲罰。
-
-### 可能解法(留待實驗)
-
-1. **調低 `clearance_weight`** 或把 clearance 的正規化上限從 1.0m 降低(例如 0.5m):讓「已經夠安全」的軌跡不再因為不夠遠而持續扣分。
-2. **調低 `robot_radius`** 貼近機身實際尺寸(x500 軸距約 0.5m,半徑 0.25~0.3 較合理;現在的 0.4 偏保守)。
-3. **加寬缺口**(見下節):不是演算法解法,是先讓 end-to-end 測試能過的工程手段。
-4. **全域規劃器**:同第 1 題,根本解法。
+1. **Hybrid reward**: `velocity_score = max(component, α·magnitude)`, with α around 0.3–0.5 — the component dominates in open space for straight-line flight, and when blocked by a wall (component drops to zero) it falls back to the magnitude reward to keep the incentive to move.
+2. **Classic DWA heading term**: add a separate "cosine of the angle between velocity direction and goal direction" term, splitting "is the direction right" from "how fast is it going" into two independent scoring terms instead of mixing them into one.
+3. **A higher-level global planner**: the fundamental fix. DWA would only handle local obstacle avoidance, with a global planner like A*/RRT supplying waypoints, making the local-minimum problem disappear naturally.
 
 ---
 
-## 3. 遠離目標後暴走、回不來(heading 項隨距離消失)
+## 2. The doorway / narrow-gap problem
 
-### 現象
+### Symptom
 
-一次 gap 場景的實測 log(goal 在 NED 的 (N=0, E=12))顯示三個階段:
+Simulation test (wall at x=5, gap width 1.5m, `robot_radius=0.4`): the drone correctly slides up to right in front of the gap, but once facing the gap head-on it **stops and oscillates slightly (vx bouncing between ±0.1), afraid to go through**.
 
-1. **對角漂移**:從 (0,0) 斜斜飛到 (5.4, 4.5)。目標在正東,卻同時往 +N 偏(scalar 速度獎勵的對角 wander + 目標藏在牆後、缺口在 +N 側)。
-2. **撞牆彈飛**:在 (5.4, 4.5) 前方剩 0.52m 擦到牆,DWA 連續回報「找不到可行速度、煞車」,但位置卻在 1 秒內暴衝 4~7 m/s(遠超 v_max=1.5)——指令是煞車 (0,0) 卻飛這麼快,幾乎確定是在 Gazebo 裡真的撞到牆被物理彈開。
-3. **暴走**:被彈到 (5, −9) 後,DWA 持續下滿速指令往**遠離目標**的方向飛,距目標從 22m 單調變大到 42m,再也回不來。
+### Root cause analysis
 
-### 根因:heading 項被 start_dist 稀釋
+With a 1.5m gap and a 0.4m body radius, flying straight through the center leaves only 0.75m to each side wall, and after subtracting the radius `safe_dist` is only 0.35m. This brings a triple penalty:
 
-暴走階段的分數:heading 恆為小負值(≈ −0.07)、clearance 飽和 1.0、velocity ≈ 0.98。問題出在原本的 heading(progress)定義:
+1. **Low clearance**: the trajectory through the gap has clearance_score ≈ 0.35, while loitering outside the gap can maintain close to 1.0.
+2. **Braking speed limit**: the admissible-velocity condition `speed ≤ √(2·safe_dist·brake_a)` at safe_dist=0.35, brake_a=1.0 only allows ≈ 0.84 m/s, so velocity_score is also suppressed.
+3. **Small geometric margin**: DWA's candidate trajectories are straight lines; cutting diagonally into a 1.5m gap from a position off the gap's axis, the endpoint easily lands within 0.4m of the wall edge and gets ruled infeasible outright.
+
+Summed together, "going through" loses to "loitering at the doorway" on score, even though going through is actually safe. This isn't a bug — the scoring function is faithfully executing the value judgment that "being close to an obstacle is bad." The problem is that this value judgment doesn't account for "this closeness is necessary and temporary."
+
+### Relationship to problem 1
+
+Both share the same root: DWA only evaluates the immediate score of "this one step," with no concept of "take a short-term loss for a long-term gain." Freezing in front of a wall is "sidestepping temporarily away from the goal" being penalized; hesitating at the doorway is "temporarily hugging an obstacle" being penalized.
+
+### Possible fixes (to be tested)
+
+1. **Lower `clearance_weight`**, or lower the clearance normalization ceiling from 1.0m (e.g. to 0.5m): so trajectories that are "already safe enough" stop losing points just for not being far enough.
+2. **Lower `robot_radius`** to match the actual body size more closely (the x500's wheelbase is about 0.5m, so a radius of 0.25–0.3 is more reasonable; the current 0.4 is conservative).
+3. **Widen the gap** (see next section): not an algorithmic fix, but an engineering workaround to get the end-to-end test passing first.
+4. **Global planner**: same as problem 1, the fundamental fix.
+
+---
+
+## 3. Running away after moving off-goal and never coming back (heading term vanishes with distance)
+
+### Symptom
+
+A real log from a gap-scenario test (goal at NED (N=0, E=12)) shows three phases:
+
+1. **Diagonal drift**: flies diagonally from (0,0) to (5.4, 4.5). The goal is due east, yet it drifts toward +N at the same time (scalar velocity reward's diagonal wander, plus the goal being hidden behind the wall with the gap on the +N side).
+2. **Wall collision and bounce**: at (5.4, 4.5), 0.52m from the wall ahead, DWA repeatedly reports "no feasible velocity found, braking," yet the position lurches 4–7 m/s within 1 second (far exceeding v_max=1.5) — the command was to brake to (0,0) yet it flew that fast, almost certainly because it actually hit the wall in Gazebo and got bounced by physics.
+3. **Runaway**: after being bounced to (5, −9), DWA keeps commanding full speed in the direction **away from the goal**, with distance-to-goal monotonically growing from 22m to 42m, never coming back.
+
+### Root cause: the heading term gets diluted by start_dist
+
+Scores during the runaway phase: heading stays at a small constant negative value (≈ −0.07), clearance is saturated at 1.0, velocity ≈ 0.98. The problem lies in the original heading (progress) definition:
 
 ```
 progress = (start_dist − final_dist) / start_dist
 ```
 
-距目標 30m 時,3m 的預測前瞻就算完全朝目標,progress 也只有 3/30 = 0.1,加權後 `0.28 × 0.1 ≈ 0.028`。**離目標越遠,「朝目標」與「背對目標」的分數差被 start_dist 稀釋到只剩 ±0.03**,而 velocity 獎勵(scalar,只要快就給 ≈ 0.3)對所有滿速方向幾乎一樣高。結果「滿速朝錯方向」不輸給「減速掉頭」,再加上動態視窗每步只能改 ±0.2 m/s、轉向很慢,無人機就一路飛走。
+At 30m from the goal, a 3m look-ahead prediction, even if pointed dead at the goal, only yields progress = 3/30 = 0.1, which after weighting is `0.28 × 0.1 ≈ 0.028`. **The farther from the goal, the more the score gap between "toward the goal" and "away from the goal" gets diluted by start_dist, down to only ±0.03**, while the velocity reward (scalar, rewarding ≈ 0.3 just for being fast) is nearly the same for every full-speed direction. As a result, "full speed in the wrong direction" doesn't lose to "decelerate and turn around," and combined with the dynamic window only allowing ±0.2 m/s change per step (turning is slow), the drone just flies off.
 
-### 為什麼「把 clearance 封頂」治不了(一個直覺的誤區)
+### Why "capping clearance" doesn't fix it (an intuitive dead end)
 
-曾經的假設是「clearance 沒有上限,讓它越飛越遠」。但:
+One earlier hypothesis was "clearance has no ceiling, letting it fly farther and farther." But:
 
-- `clearance_score = clip(safe_dist, 0, 1.0)` **早就有上限**,離障礙物超過約 1.2m 就飽和在 1.0。
-- 更關鍵:暴走發生在開闊空間,**每個候選方向的 clearance 都是 1.0**。一個對所有候選都相等的項,在 argmax 裡會互相抵消、完全不影響選誰。所以 clearance 在開闊區是「中性」的,它沒把無人機推離目標。
+- `clearance_score = clip(safe_dist, 0, 1.0)` **already has a ceiling** — beyond about 1.2m from an obstacle it already saturates at 1.0.
+- More importantly: the runaway happens in open space, where **every candidate direction has clearance = 1.0**. A term that's equal across all candidates cancels out in the argmax and has zero effect on which one gets picked. So clearance is "neutral" in open areas — it isn't what pushed the drone away from the goal.
 
-不是 clearance 推走它,是 **heading 太弱、拉不回來**。封頂 clearance 不會改變開闊區的暴走。
+It's not clearance pushing it away — it's that **heading is too weak to pull it back**. Capping clearance wouldn't change the open-area runaway at all.
 
-### 修法:改用「與距離無關」的角度式 heading(已套用)
+### Fix: switch to a distance-independent, angle-based heading (already applied)
 
-把 heading 換成經典 DWA(Fox 1997)的角度定義——速度方向與「指向目標方向」的**夾角餘弦**:
+Replaced heading with the classic DWA (Fox 1997) angular definition — the **cosine of the angle** between velocity direction and "direction toward the goal":
 
 ```
-heading_score = (vx·ux + vy·uy) / |v|          # ux,uy 是指向目標的單位向量
+heading_score = (vx·ux + vy·uy) / |v|          # ux, uy is the unit vector pointing at the goal
 ```
 
-範圍固定 [−1, 1] (+1 正對目標、−1 背對),**不管目標多遠,朝目標 vs 背對的分差永遠是滿的 ±weight**。相對舊的 progress 比值(遠處歸零),這直接補回了遠距離的導向力,且「背對目標」變成明確的負分,主動抑制暴走。改動只在 `dwa_core.py` 的 heading 那一項,clearance / velocity / 動態視窗都沒動。
+Fixed range [−1, 1] (+1 = directly at the goal, −1 = directly away), so **no matter how far the goal is, the score gap between toward vs. away from the goal is always the full ±weight**. Compared to the old progress ratio (which vanishes at distance), this directly restores the steering force at long range, and "facing away from the goal" becomes an explicit negative score, actively suppressing runaway behavior. The change is confined to the heading term in `dwa_core.py`; clearance / velocity / the dynamic window are untouched.
 
-### 驗證(離線,尚未接 Gazebo 重跑)
+### Verification (offline, not yet re-run in Gazebo)
 
-- **遠距離導向力**:在開闊區、距目標 32m 起步,新 heading 直接選 `heading_score = 1.0`(正對目標);舊版此時只有 ≈ 0.1。
-- **暴走回收**:重現 (5, −9) 滿速背對目標的狀態,新版會在動態視窗允許範圍內開始往目標轉回(vy −0.45 → −0.25,逐步翻正)。
-- **開闊直飛**:(0,0)→(0,12) 全程 N 向漂移收在 ±0.16m(舊 scalar 版會漂到 ≈ 2.3m),t≈9s 抵達。
+- **Long-range steering force**: starting 32m from the goal in open space, the new heading directly selects `heading_score = 1.0` (pointed straight at the goal); the old version only got ≈ 0.1 here.
+- **Runaway recovery**: reproducing the state of full speed facing away from the goal at (5, −9), the new version starts turning back toward the goal within the allowed dynamic window (vy −0.45 → −0.25, gradually flipping positive).
+- **Open-space straight flight**: (0,0)→(0,12), N-direction drift stays within ±0.16m over the whole run (the old scalar version drifted to ≈ 2.3m), arriving at t≈9s.
 
-### 尚未解決(另一條線)
+### Not yet resolved (a separate thread)
 
-第 2 階段的「撞牆彈飛」是獨立問題:infeasible 時的煞車沒真的拉住、加上貼牆太近被物理彈開。heading 修好能讓它被彈飛後至少會飛回來,但**不撞牆**還要另外處理(infeasible 時做受控煞停、或別讓它逼到牆這麼近;以及第 1、2 題的 local minimum)。
+The "wall collision and bounce" from phase 2 is a separate problem: braking on infeasible didn't actually hold, and hugging the wall too closely led to a physics bounce. Fixing heading means it at least flies back after being bounced, but **not hitting the wall in the first place** still needs separate handling (controlled braking on infeasible, or not letting it get pushed this close to the wall in the first place; plus the local-minimum issues from problems 1 and 2).
 
 ---
 
-## 4. 世界檔的暫時調整(為了先測 end-to-end)
+## 4. Temporary world-file adjustment (to test end-to-end first)
 
-為了先驗證「起飛 → 避障 → 抵達終點」整條 pipeline 能跑通,`dwa_test.sdf` 的缺口先從 1.5m 加寬到 **3m**(y = 0.75 ~ 3.75,中心維持 y=2.25 不變):
+To first validate that the whole "takeoff → obstacle avoidance → reach the destination" pipeline works, the gap in `dwa_test.sdf` was temporarily widened from 1.5m to **3m** (y = 0.75 ~ 3.75, center kept at y=2.25):
 
-- 走缺口中央時 safe_dist = 1.5 − 0.4 = 1.1m,clearance_score 直接吃滿 1.0,煞停限速也解除,第 2 題的三重懲罰全部消失。
-- 等 pipeline 驗證通過,再把缺口逐步收窄(3m → 2m → 1.5m),回頭做第 2 題的參數實驗。
+- Flying through the gap center now gives safe_dist = 1.5 − 0.4 = 1.1m, so clearance_score hits 1.0 outright and the braking speed limit is lifted, eliminating all three penalties from problem 2.
+- Once the pipeline is verified, the gap will be narrowed step by step (3m → 2m → 1.5m) to go back and run the parameter experiments for problem 2.
 
-改完記得重新同步 world 到 PX4:
+Remember to resync the world to PX4 after changing it:
 
 ```bash
 cd ~/ws/src/HOLO-DWA
