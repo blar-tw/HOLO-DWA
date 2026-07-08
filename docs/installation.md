@@ -1,4 +1,4 @@
-# 安裝步驟 (WSL2 + Ubuntu 22.04 + ROS 2 Humble + PX4 v1.14.x + Gazebo)
+# Installation steps (WSL2 + Ubuntu 22.04 + ROS 2 Humble + PX4 v1.14.x + Gazebo)
 
 ## 0. WSL2
 
@@ -7,7 +7,7 @@ wsl --install
 wsl --install -d Ubuntu-22.04
 ```
 
-## 1. 基礎工具 + locale
+## 1. Base tools + locale
 
 ```bash
 sudo apt update && sudo apt upgrade -y
@@ -37,7 +37,7 @@ sudo apt install -y ros-humble-desktop
 
 ## 3. PX4-Autopilot + Gazebo
 
-`v1.14` 沒有對應的裸 tag，要 pin 到實際存在的版本（這裡用該系列最新的 `v1.14.4`）：
+There's no bare tag for `v1.14`, so pin to an actual existing version (using the latest in that series, `v1.14.4`, here):
 
 ```bash
 git clone https://github.com/PX4/PX4-Autopilot.git --recursive
@@ -47,7 +47,7 @@ git submodule update --init --recursive
 bash ./Tools/setup/ubuntu.sh
 ```
 
-**確認實際裝到的 Gazebo 版本**（這一步很重要，下一步要對應這個版本裝正確的 bridge）：
+**Confirm the Gazebo version that actually got installed** (this step matters — the next step needs to install the matching bridge for this version):
 
 ```bash
 gz sim --version
@@ -56,44 +56,44 @@ gz sim --version
 - `Gazebo Sim, version 8.x.x` → Gazebo **Harmonic**
 - `Gazebo Sim, version 7.x.x` → Gazebo **Garden**
 
-## 4. 安裝對應版本的 ros_gz bridge（⚠️ 版本不對就是先前 archive/bug.md 那個問題的根因）
+## 4. Install the matching ros_gz bridge (⚠️ a version mismatch here is the root cause of the issue documented earlier in archive/bug.md)
 
-ROS 2 Humble 預設的 `ros-humble-ros-gz-bridge` 是對應 **Gazebo Fortress**（`ignition-*` 系列套件）編譯的，Garden／Harmonic 都不能用這個預設套件，裝下去雖然會成功、topic 也看得到，但訊息完全收不到（`/clock` 也不會動），因為 `gz-msgs`/`gz-transport`（或 Fortress 時代的 `ignition-*`）版本互不相容、解碼失敗。要照實際裝到的版本裝對應的 meta-package，而且它們會互相衝突、只能裝一個：
+The default `ros-humble-ros-gz-bridge` for ROS 2 Humble is built against **Gazebo Fortress** (the `ignition-*` package series). Neither Garden nor Harmonic can use this default package — installing it will "succeed" and topics will even show up, but messages never actually arrive (`/clock` won't tick either), because the `gz-msgs`/`gz-transport` (or `ignition-*` from the Fortress era) versions are incompatible and decoding fails. You need to install the meta-package matching the version actually installed, and they conflict with each other — only one can be installed:
 
 ```bash
-# 若上一步確認是 Harmonic (8.x)：
+# If the previous step confirmed Harmonic (8.x):
 sudo apt remove -y ros-humble-ros-gz-bridge ros-humble-ros-gz 2>/dev/null || true
 sudo apt install -y ros-humble-ros-gzharmonic
 
-# 若上一步確認是 Garden (7.x)：
+# If the previous step confirmed Garden (7.x):
 sudo apt remove -y ros-humble-ros-gz-bridge ros-humble-ros-gz 2>/dev/null || true
 sudo apt install -y ros-humble-ros-gzgarden
 ```
 
-實測下來，PX4 v1.14.4 的 `Tools/setup/ubuntu.sh` 在 Ubuntu 22.04 上裝的其實是 **Garden (7.x)**，不是本文一開始猜測的 Harmonic，所以務必先跑 `gz sim --version` 確認再挑對應套件，不要直接假設是 Harmonic。
+In practice, PX4 v1.14.4's `Tools/setup/ubuntu.sh` actually installs **Garden (7.x)** on Ubuntu 22.04, not Harmonic as initially assumed at the start of this doc — so always run `gz sim --version` to confirm before picking the matching package; don't just assume Harmonic.
 
-### 最小驗證（裝完立刻測試，不要等到接上整條 pipeline 才發現壞掉）
+### Minimal verification (test immediately after installing — don't wait until the whole pipeline is wired up to discover it's broken)
 
-獨立開一個 Gazebo world，手動 bridge `/clock`，確認真的有資料流出來：
+Start a standalone Gazebo world and manually bridge `/clock` to confirm data is actually flowing:
 
 ```bash
 gz sim -r shapes.sdf
 ```
 
-另開一個 terminal：
+In another terminal:
 
 ```bash
 source /opt/ros/humble/setup.bash
 ros2 run ros_gz_bridge parameter_bridge /clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock
 ```
 
-再開一個 terminal 檢查：
+And in yet another terminal, check:
 
 ```bash
 ros2 topic echo /clock
 ```
 
-**這裡必須要能看到持續變動的時間戳，才代表 bridge 版本裝對了。** 如果這步就沒資料，先別往下走，回頭確認 `gz sim --version` 跟裝的 bridge 套件是否真的對應。
+**You must see a continuously changing timestamp here — that's what confirms the bridge version is correctly installed.** If there's no data at this step, don't proceed further; go back and confirm that `gz sim --version` and the installed bridge package actually match.
 
 ## 5. ROS 2 workspace
 
@@ -118,35 +118,35 @@ source /opt/ros/humble/setup.bash
 colcon build
 ```
 
-把常用的 source 指令寫進 `.bashrc`，避免每次開新 terminal 都要重打：
+Add the commonly used source commands to `.bashrc` so you don't have to retype them every time you open a new terminal:
 
 ```bash
 echo 'source /opt/ros/humble/setup.bash' >> ~/.bashrc
 echo 'source ~/ws/install/setup.bash' >> ~/.bashrc
 ```
 
-## 6. 補齊 PX4-Autopilot 缺少的 gz model（x500_lidar_2d / lidar_2d_v2）
+## 6. Add the gz models missing from PX4-Autopilot (x500_lidar_2d / lidar_2d_v2)
 
-`PX4-Autopilot` 的 `Tools/simulation/gz` 是一個獨立 submodule（指向 [`PX4/PX4-gazebo-models`](https://github.com/PX4/PX4-gazebo-models)），`v1.14.4` 這個 tag 當時 pin 住的 submodule commit **還沒有** `x500_lidar_2d` 跟 `lidar_2d_v2` 這兩個 model，需要的 airframe 設定檔（`4013_gz_x500_lidar_2d`）也還沒進到 ROMFS。如果跳過這步，`make px4_sitl gz_x500_lidar_2d` 會直接失敗（`ninja: error: unknown target 'gz_x500_lidar_2d'`）。
+PX4-Autopilot's `Tools/simulation/gz` is a separate submodule (pointing at [`PX4/PX4-gazebo-models`](https://github.com/PX4/PX4-gazebo-models)). The submodule commit pinned by the `v1.14.4` tag **does not yet have** the `x500_lidar_2d` and `lidar_2d_v2` models, and the required airframe config file (`4013_gz_x500_lidar_2d`) hasn't landed in ROMFS either. Skipping this step makes `make px4_sitl gz_x500_lidar_2d` fail outright (`ninja: error: unknown target 'gz_x500_lidar_2d'`).
 
-這幾個檔案已經整理進本 repo 的 [`gz_extra/`](../gz_extra/)（從 `PX4-gazebo-models` 和 `PX4-Autopilot` 上游最新 `main` branch 複製，SDF/mesh 本身跟 PX4 韌體版本無關，可以安全套用到 `v1.14.4`）。跑一次 setup script 把它們複製進 PX4-Autopilot（可重複執行，不會重複加同一行）：
+These files have already been collected into this repo's [`gz_extra/`](../gz_extra/) (copied from the latest upstream `main` branch of `PX4-gazebo-models` and `PX4-Autopilot` — the SDF/mesh files themselves are independent of the PX4 firmware version, so they can be safely applied to `v1.14.4`). Run the setup script once to copy them into PX4-Autopilot (safe to re-run; it won't add the same line twice):
 
 ```bash
 cd ~/ws/src/HOLO-DWA
 ./gz_extra/install.sh ~/PX4-Autopilot
 ```
 
-`gz_extra/` 裡也附了一個帶牆跟圓柱障礙物的測試 world（`worlds/dwa_test.sdf`），裝完之後可以用：
+`gz_extra/` also includes a test world with a wall and cylinder obstacles (`worlds/dwa_test.sdf`); once installed, you can use:
 
 ```bash
 PX4_GZ_WORLD=dwa_test make px4_sitl gz_x500_lidar_2d
 ```
 
-跑起來測 DWA 避障（無人機從原點往 +X 飛，會先遇到 x=5 帶缺口的牆，再遇到 x=8 的兩根圓柱）。
+to run and test DWA obstacle avoidance (the drone flies from the origin toward +X, first meets the gapped wall at x=5, then the two cylinders at x=8).
 
-## 7. PX4 參數：允許 offboard 模式在沒有 RC 遙控器的情況下運作
+## 7. PX4 parameters: allow offboard mode to work without an RC transmitter
 
-進到 PX4 SITL console 後執行：
+After entering the PX4 SITL console, run:
 
 ```
 param set NAV_DLL_ACT 0
@@ -155,26 +155,26 @@ param set COM_RCL_EXCEPT 4
 param save
 ```
 
-之後就能直接：
+After that you can go straight to:
 
 ```
 commander mode offboard
 commander arm -f
 ```
 
-## 8. 執行
+## 8. Running it
 
-無人機模型參考：`PX4-Autopilot/Tools/simulation/gz/models/x500_lidar_2d/model.sdf`
-LiDAR 模型（常駐開啟）：`PX4-Autopilot/Tools/simulation/gz/models/lidar_2d_v2/model.sdf`
+Drone model reference: `PX4-Autopilot/Tools/simulation/gz/models/x500_lidar_2d/model.sdf`
+LiDAR model (always on): `PX4-Autopilot/Tools/simulation/gz/models/lidar_2d_v2/model.sdf`
 
-### 方式一：一鍵啟動（推薦）
+### Option 1: one-shot launch (recommended)
 
 ```bash
 cd ~/ws/src/HOLO-DWA
 ./run.sh
 ```
 
-### 方式二：手動分 4 個 terminal
+### Option 2: manually, across 4 terminals
 
 ```bash
 # terminal 1

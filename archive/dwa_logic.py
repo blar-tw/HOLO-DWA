@@ -313,12 +313,12 @@ def main():
 
         drone.step(vx_cmd, vy_cmd)
 
-        # 更新攝影機位置，使其跟隨無人機並保持由上俯視的角度
+        # Update the camera position so it follows the drone from a top-down angle
         p.resetDebugVisualizerCamera(
-            cameraDistance=10.0,           # 攝影機高度/距離
-            cameraYaw=0,                  # 偏航角
-            cameraPitch=-89.9,            # 俯視角度 (接近 -90 度為正上方)
-            cameraTargetPosition=[pos[0], pos[1], pos[2]] # 跟隨無人機座標
+            cameraDistance=10.0,           # camera height/distance
+            cameraYaw=0,                  # yaw angle
+            cameraPitch=-89.9,            # pitch angle (near -90 = straight down)
+            cameraTargetPosition=[pos[0], pos[1], pos[2]] # follow the drone's position
         )
 
         p.stepSimulation()

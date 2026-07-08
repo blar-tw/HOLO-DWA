@@ -3,7 +3,7 @@ __pycache__/
 *.pyc
 *.pyo
 
-# colcon / ROS 2（以防有人在這個資料夾裡誤跑 colcon build）
+# colcon / ROS 2 (in case someone accidentally runs colcon build in this folder)
 build/
 install/
 log/
@@ -14,7 +14,7 @@ log/
 *.swp
 .DS_Store
 
-# 一般 log 檔
+# General log files
 *.log
 
 # Simulation run outputs

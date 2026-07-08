@@ -59,7 +59,7 @@ class DroneLidarScanner(Node):
     def __init__(self):
         super().__init__('scanner')
 
-        # PX4 要求的 QoS 設定 (通訊品質設定)
+        # QoS settings required by PX4 (communication quality-of-service settings)
         qos_profile = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -67,12 +67,12 @@ class DroneLidarScanner(Node):
             depth=1
         )
 
-        # 1. 建立 Publisher (對飛控下指令)
+        # 1. Create publishers (send commands to the flight controller)
         self.offboard_control_mode_publisher = self.create_publisher(OffboardControlMode, '/fmu/in/offboard_control_mode', qos_profile)
         self.trajectory_setpoint_publisher = self.create_publisher(TrajectorySetpoint, '/fmu/in/trajectory_setpoint', qos_profile)
         self.vehicle_command_publisher = self.create_publisher(VehicleCommand, '/fmu/in/vehicle_command', qos_profile)
 
-        # 2. 建立 Subscriber (讀取飛控狀態與雷達資料)
+        # 2. Create subscribers (read flight-controller state and lidar data)
         self.odom_sub = self.create_subscription(VehicleOdometry, '/fmu/out/vehicle_odometry', self.odom_callback, qos_profile_sensor_data)
         lidar_qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
@@ -88,14 +88,14 @@ class DroneLidarScanner(Node):
             lidar_qos
         )
 
-        # 3. 建立計時器 (20Hz，用於發送心跳訊號與控制迴圈)
+        # 3. Create a timer (20Hz, used for sending heartbeats and the control loop)
         self.timer = self.create_timer(0.05, self.timer_callback)
 
-        # 狀態變數
+        # State variables
         self.nav_state = "INIT"
         self.heartbeat_counter = 0
         self.current_alt = 0.0
-        self.takeoff_alt = -2.0  # PX4 使用 NED 座標系 (Z軸朝下)，所以 -2.0 代表往上飛 2 公尺
+        self.takeoff_alt = -2.0  # PX4 uses the NED frame (Z axis points down), so -2.0 means climbing 2 meters
         self.last_lidar_time = None
         self.last_lidar_warning_time = 0.0
 
@@ -108,14 +108,14 @@ class DroneLidarScanner(Node):
         self.last_status_print_sec = 0.0
         self.status_print_period = 1.0
 
-        # 里程計狀態 (與 LiDAR 同一個 local frame，供 DWA 使用)
+        # Odometry state (same local frame as the LiDAR, used by DWA)
         self.pos_x = 0.0
         self.pos_y = 0.0
         self.vel_x = 0.0
         self.vel_y = 0.0
         self.yaw = 0.0
         self.latest_scan = None
-        self.lidar_stride = 6  # 1080 條光束降採樣到 ~180 個障礙點，加快 DWA 搜尋
+        self.lidar_stride = 6  # downsample 1080 beams to ~180 obstacle points to speed up the DWA search
 
         # Goal is given in Gazebo world coordinates (ENU: x East, y North),
         # the same frame the obstacles in dwa_test.sdf are placed in.
@@ -215,12 +215,12 @@ class DroneLidarScanner(Node):
     # ------------------------------------------------------------------ utils
     @staticmethod
     def _yaw_from_quaternion(q):
-        """從 (w, x, y, z) 四元數取出繞 Z 軸的 yaw"""
+        """Extract yaw about the Z axis from the (w, x, y, z) quaternion"""
         w, x, y, z = q[0], q[1], q[2], q[3]
         return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
 
     def odom_callback(self, msg):
-        """即時更新無人機的高度、位置、速度與朝向，供 DWA 使用"""
+        """Update the drone's altitude, position, velocity, and heading in real time, for DWA to use"""
         self.current_alt = msg.position[2]
 
         if np.all(np.isfinite(msg.position[:2])):
@@ -254,37 +254,38 @@ class DroneLidarScanner(Node):
         return math.atan2(de, dn)
 
     def lidar_callback(self, msg):
-        """處理 2D LiDAR 掃描數據"""
+        """Process the 2D LiDAR scan data"""
         self.last_lidar_time = self.get_clock().now()
-        self.latest_scan = msg  # 保留給 timer_callback 的 DWA 控制迴圈使用
+        self.latest_scan = msg  # kept for timer_callback's DWA control loop to use
 
-        # 導航與返航階段都要更新雷達回報 (以免返航時 log 是舊值)
+        # Update the lidar readout in both NAVIGATE and RETURN_HOME (so the log isn't stale during return)
         if self.nav_state not in ("NAVIGATE", "RETURN_HOME"):
             return
 
         ranges = np.array(msg.ranges)
 
-        # 過濾掉無效值 (inf 或超過最大範圍的點)
+        # Filter out invalid values (inf or points beyond the max range)
         valid_indices = np.where((ranges > msg.range_min) & (ranges < msg.range_max))[0]
 
         if len(valid_indices) == 0:
-            # 四周沒有有效回波，視為淨空
+            # No valid returns anywhere around, treat as clear
             self.front_dist = float('inf')
             self.min_threat = float('inf')
             self.min_threat_angle = 0.0
             return
 
-        # 1. 找出四周「最近」的障礙物
+        # 1. Find the "closest" obstacle anywhere around
         min_dist = np.min(ranges[valid_indices])
         min_idx = valid_indices[np.argmin(ranges[valid_indices])]
 
-        # 計算該障礙物的實際角度 (度數)。取負號把 gz 掃描的 z-up 慣例
-        # (正角 = 機體左) 轉成規劃器使用的 FRD 慣例 (正角 = 機體右),
-        # 與 scan_to_world_points(flip_y=True) 一致。
+        # Compute that obstacle's actual angle (in degrees). Negating converts
+        # gz's scan z-up convention (positive angle = body left) into the
+        # planner's FRD convention (positive angle = body right), consistent
+        # with scan_to_world_points(flip_y=True).
         min_angle_rad = -(msg.angle_min + min_idx * msg.angle_increment)
         min_angle_deg = math.degrees(min_angle_rad)
 
-        # 2. 讀取「正前方」的距離，取 0 度左右約 10 度範圍
+        # 2. Read the distance "straight ahead", taking roughly a 10-degree range around 0 degrees
         front_center = int(round((0.0 - msg.angle_min) / msg.angle_increment))
         front_half_width = max(1, int(round(math.radians(10.0) / msg.angle_increment)))
         front_start = max(0, front_center - front_half_width)
@@ -293,7 +294,7 @@ class DroneLidarScanner(Node):
         valid_front = front_slice[(front_slice > msg.range_min) & (front_slice < msg.range_max)]
         front_dist = np.min(valid_front) if len(valid_front) > 0 else float('inf')
 
-        # 存起來，交給 run_dwa_navigation 的節流輸出一起印 (避免 30Hz 洗版)
+        # Stash these; the throttled printout in run_dwa_navigation prints them together (avoids flooding at 30Hz)
         self.front_dist = float(front_dist)
         self.min_threat = float(min_dist)
         self.min_threat_angle = min_angle_deg
@@ -392,13 +393,13 @@ class DroneLidarScanner(Node):
 
     # ------------------------------------------------------------- main loop
     def timer_callback(self):
-        """主控制迴圈 (20Hz)"""
-        # 1. 永遠保持發送 Offboard 心跳 (PX4 安全機制)
-        # NAVIGATE / RETURN_HOME 用速度控制 x/y、位置控制 z，其餘階段全程用位置控制
+        """Main control loop (20Hz)"""
+        # 1. Always keep sending the Offboard heartbeat (PX4 safety mechanism)
+        # NAVIGATE / RETURN_HOME use velocity control for x/y and position control for z; all other states use position control throughout
         moving = self.nav_state in ("NAVIGATE", "RETURN_HOME")
         self.publish_offboard_control_heartbeat(use_velocity=moving)
 
-        # 2. 狀態機控制
+        # 2. State machine control
         # NOTE: log the tick BEFORE any state transition so the CSV "state"
         # column matches the branch that actually ran this tick.
         if self.nav_state == "INIT":
@@ -423,13 +424,13 @@ class DroneLidarScanner(Node):
                 # always start from (0,0); otherwise begin navigating right away.
                 if math.hypot(self.pos_x, self.pos_y) > self.home_threshold:
                     self.get_logger().info(
-                        f"🚁 到達高度，但不在原點 (dist={math.hypot(self.pos_x, self.pos_y):.1f}m) "
-                        f"→ 先用 DWA 飛回原點")
+                        f"🚁 reached altitude but not at origin (dist={math.hypot(self.pos_x, self.pos_y):.1f}m) "
+                        f"-> flying back to origin via DWA first")
                     self._begin_return()
                 else:
                     self._start_run()
                     self.nav_state = "NAVIGATE"
-                    self.get_logger().info("🚁 到達目標高度！開始 DWA 導航...")
+                    self.get_logger().info("🚁 reached target altitude! starting DWA navigation...")
 
         elif self.nav_state == "NAVIGATE":
             goal_n, goal_e = self.get_goal_ned()
@@ -475,11 +476,11 @@ class DroneLidarScanner(Node):
         target_yaw = self.yaw_to_goal(target_n, target_e)
 
         if self.latest_scan is None:
-            # 還沒收到任何 LiDAR 資料前，原地懸停等待，不盲飛
+            # Hover in place and wait until LiDAR data arrives, rather than flying blind
             self.publish_position_setpoint(self.pos_x, self.pos_y, self.takeoff_alt, yaw=target_yaw)
             now_sec = self.get_clock().now().nanoseconds / 1e9
             if now_sec - self.last_lidar_warning_time > 2.0:
-                self.get_logger().warn("尚未收到 LiDAR 資料，請確認 Gazebo scan topic 與 ros_gz_bridge 是否正在發布。")
+                self.get_logger().warn("No LiDAR data received yet; check whether the Gazebo scan topic and ros_gz_bridge are publishing.")
                 self.last_lidar_warning_time = now_sec
             self._log_tick(0.0, 0.0, (target_n, target_e), False, None, n_obs=0, compute_ms=0.0)
             return
@@ -520,7 +521,7 @@ class DroneLidarScanner(Node):
         if not is_return:
             self._accumulate_metrics(ok, dbg, compute_ms)
 
-        # 節流輸出一整套狀態 (~1Hz)
+        # Throttled printout of the full status set (~1Hz)
         now_sec = self.get_clock().now().nanoseconds / 1e9
         if now_sec - self.last_status_print_sec >= self.status_print_period:
             self.last_status_print_sec = now_sec
@@ -529,15 +530,15 @@ class DroneLidarScanner(Node):
                 self.get_logger().info(
                     f"[{tag}] run{self.run_id} pos(N,E)=({self.pos_x:+.2f}, {self.pos_y:+.2f}) "
                     f"| cmd v=({vx_cmd:+.2f}, {vy_cmd:+.2f}) "
-                    f"| 前方={self.front_dist:.2f}m 最近威脅={self.min_threat:.2f}m@{self.min_threat_angle:+.0f}° "
+                    f"| front={self.front_dist:.2f}m nearest_threat={self.min_threat:.2f}m@{self.min_threat_angle:+.0f}deg "
                     f"| H={dbg['heading_term']:.3f} C={dbg['clearance_term']:.3f} V={dbg['velocity_term']:.3f} "
-                    f"總分={dbg['total']:.3f} | 距目標={dist_to_target:.2f}m | {compute_ms:.1f}ms"
+                    f"total={dbg['total']:.3f} | dist_to_goal={dist_to_target:.2f}m | {compute_ms:.1f}ms"
                 )
             else:
                 self.get_logger().warn(
-                    f"[{tag}] run{self.run_id} pos(N,E)=({self.pos_x:+.2f}, {self.pos_y:+.2f}) 找不到可行速度，煞車懸停 "
-                    f"| 前方={self.front_dist:.2f}m 最近威脅={self.min_threat:.2f}m@{self.min_threat_angle:+.0f}° "
-                    f"| 距目標={dist_to_target:.2f}m"
+                    f"[{tag}] run{self.run_id} pos(N,E)=({self.pos_x:+.2f}, {self.pos_y:+.2f}) no feasible velocity, braking to hover "
+                    f"| front={self.front_dist:.2f}m nearest_threat={self.min_threat:.2f}m@{self.min_threat_angle:+.0f}deg "
+                    f"| dist_to_goal={dist_to_target:.2f}m"
                 )
 
     def _next_after_run(self):
@@ -627,7 +628,7 @@ class DroneLidarScanner(Node):
         self._csv.writerow(row)
         self._csv_file.flush()
 
-    # --- PX4 底層發布函式 ---
+    # --- low-level PX4 publish functions ---
     def publish_offboard_control_heartbeat(self, use_velocity=False):
         msg = OffboardControlMode()
         msg.position = True
@@ -646,7 +647,7 @@ class DroneLidarScanner(Node):
         self.trajectory_setpoint_publisher.publish(msg)
 
     def publish_velocity_setpoint(self, vx, vy, z, yaw=0.0):
-        """z 用位置控制維持高度，x/y 用 DWA 算出的速度指令 (PX4 逐軸 NaN passthrough)"""
+        """z holds altitude via position control; x/y use the DWA-computed velocity command (PX4 per-axis NaN passthrough)"""
         nan = float('nan')
         msg = TrajectorySetpoint()
         msg.position = [nan, nan, z]
