@@ -6,6 +6,7 @@
 ## Demo
 ![Demo](docs/demo.gif)
 ### More demo runs are available in the [demo folder](holo_lab/demo/)
+WIP: adding Rviz demo
 
 ## Table of Contents
 
